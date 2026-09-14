@@ -55,7 +55,7 @@ class Workspace:
         target = root / MANIFEST_DIR / MANIFEST_FILE
         if not target.is_file():
             return cls(root=root)
-        raw = json.loads(target.read_text())
+        raw = json.loads(target.read_text(encoding="utf-8"))
         return cls(
             root=root,
             package=raw.get("package", ""),
@@ -95,7 +95,8 @@ class Workspace:
                 },
                 indent=2,
             )
-            + "\n"
+            + "\n",
+            encoding="utf-8",
         )
 
     # ------------------------------------------------------------------ layout

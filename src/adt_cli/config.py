@@ -42,7 +42,7 @@ def _read_raw() -> dict:
     if not CONFIG_HOME.is_file():
         return {}
     try:
-        return json.loads(CONFIG_HOME.read_text())
+        return json.loads(CONFIG_HOME.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ConfigError(f"{CONFIG_HOME} is not valid JSON: {exc}") from exc
 
@@ -97,8 +97,11 @@ def remove_system(name: str) -> None:
 
 def _write_raw(raw: dict) -> None:
     CONFIG_HOME.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_HOME.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n")
-    CONFIG_HOME.chmod(0o600)
+    CONFIG_HOME.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        CONFIG_HOME.chmod(0o600)
+    except OSError:
+        pass  # best effort; Windows ACLs don't map to POSIX permission bits
 
 
 def resolve(
