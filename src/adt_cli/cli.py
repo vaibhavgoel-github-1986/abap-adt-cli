@@ -78,6 +78,30 @@ def _resolve_root(dest: Path | None, package: str) -> Path:
     return (here / package.upper()).resolve()
 
 
+async def _remote_drift(
+    adt: AdtSession, space: Workspace, locals_: list[str], jobs: int = 16
+) -> tuple[list[str], list[str]]:
+    """Locals whose server copy no longer matches the pulled baseline.
+
+    The manifest hash is what the server handed us at pull time, so a mismatch
+    means somebody else (SE80, Eclipse, another push) changed the object since.
+    Returns (drifted, unreadable).
+    """
+    targets = [local for local in locals_ if space.writable(local)]
+    if not targets:
+        return [], []
+    results = await repository.fetch_sources(
+        adt, [space.object_for(local) for local in targets], concurrency=jobs
+    )
+    drifted, unreadable = [], []
+    for local, result in zip(targets, results):
+        if not result.ok:
+            unreadable.append(local)
+        elif workspace.sha256(result.text) != space.files[local].sha256:
+            drifted.append(local)
+    return drifted, unreadable
+
+
 # --------------------------------------------------------------------------- commands
 
 
@@ -274,9 +298,13 @@ def pull(
 @app.command()
 def status(
     package: PackageArg = "",
+    system: SystemOpt = "",
     dest: Optional[Path] = typer.Option(None, "--dest", "-d", help="Local folder."),
+    remote: Annotated[
+        bool, typer.Option("--remote", "-r", help="Also check what changed on the server.")
+    ] = False,
 ) -> None:
-    """Show locally modified objects. Works offline."""
+    """Show locally modified objects. Offline unless --remote is given."""
     root = _resolve_root(dest, package)
     space = Workspace.load(root)
     if not space.exists:
@@ -284,14 +312,46 @@ def status(
 
     modified, deleted = space.scan()
     console.print(f"[bold]{space.package}[/] from {space.system}, pulled {space.pulled_at}")
+
+    drifted: list[str] = []
+    if remote:
+        target, password = _connect(system or space.system)
+
+        async def check() -> tuple[list[str], list[str]]:
+            async with _session(target, password) as adt:
+                return await _remote_drift(adt, space, sorted(space.files))
+
+        try:
+            drifted, unreadable = asyncio.run(check())
+        except AdtError as exc:
+            _fail(str(exc))
+            return
+        for local in unreadable:
+            console.print(f"  [yellow]?[/]  {local} could not be read")
+
     for local in modified:
-        console.print(f"  [yellow]M[/]  {local}")
+        marker = "[red]C[/]" if local in drifted else "[yellow]M[/]"
+        suffix = "  [dim](also changed on server)[/]" if local in drifted else ""
+        console.print(f"  {marker}  {local}{suffix}")
     for local in deleted:
         console.print(f"  [red]D[/]  {local}")
-    if not modified and not deleted:
+    for local in drifted:
+        if local not in modified:
+            console.print(f"  [blue]R[/]  {local}  [dim](changed on server)[/]")
+
+    if not modified and not deleted and not drifted:
         console.print("  [green]clean[/] - no local changes")
         return
-    console.print(f"\n{len(modified)} modified, {len(deleted)} deleted")
+
+    conflicts = [local for local in modified if local in drifted]
+    summary = f"\n{len(modified)} modified, {len(deleted)} deleted"
+    if remote:
+        summary += f", {len(drifted)} changed on server"
+    console.print(summary)
+    if conflicts:
+        console.print(
+            f"[red]{len(conflicts)} conflict(s)[/] - push will refuse these until you re-pull"
+        )
 
 
 @app.command()
@@ -301,8 +361,11 @@ def push(
     dest: Optional[Path] = typer.Option(None, "--dest", "-d", help="Local folder."),
     transport: Annotated[str, typer.Option(help="Transport request.")] = "",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be sent.")] = False,
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="Push even if the object changed on the server.")
+    ] = False,
 ) -> None:
-    """Upload locally modified objects and activate them."""
+    """Upload locally modified objects. They stay inactive until activated."""
     root = _resolve_root(dest, package)
     space = Workspace.load(root)
     if not space.exists:
@@ -321,6 +384,14 @@ def push(
             err_console.print(f"  [red]![/]  {local} is not a writable source object")
         _fail("refusing to push non-source objects")
 
+    # Local packages ($TMP and friends) are never transported; everything else needs
+    # an explicit transport rather than letting SAP silently auto-generate one.
+    if not transport and not space.package.startswith("$"):
+        _fail(
+            f"package {space.package} is transportable - pass --transport <TR> "
+            "(only local $ packages can push without one)"
+        )
+
     for local in modified:
         console.print(f"  [yellow]M[/]  {local}")
     if dry_run:
@@ -331,6 +402,19 @@ def push(
 
     async def run() -> None:
         async with _session(target, password) as adt:
+            if not force:
+                drifted, unreadable = await _remote_drift(adt, space, modified)
+                for local in unreadable:
+                    err_console.print(f"  [yellow]?[/]  {local} could not be read back")
+                if drifted:
+                    for local in drifted:
+                        err_console.print(
+                            f"  [red]C[/]  {local} also changed on {target.name} since your pull"
+                        )
+                    _fail(
+                        f"{len(drifted)} object(s) changed on the server - pushing would "
+                        "overwrite that work. Re-pull to inspect, or use --force to overwrite."
+                    )
             for local in modified:
                 obj = space.object_for(local)
                 text = (root / local).read_text(encoding="utf-8")
