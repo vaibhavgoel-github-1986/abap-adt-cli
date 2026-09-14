@@ -81,8 +81,9 @@ Source-based objects are pulled as text: classes, interfaces, programs, includes
 function modules, CDS data definitions, metadata extensions, access controls,
 behavior definitions, service definitions.
 
-Non-source objects — service bindings, message classes, packages — are listed but
-not pulled. Adding a type is one line in `objects.py`.
+Non-source objects — service bindings, message classes, packages — are pulled as
+their ADT metadata XML instead of source text, and can't be pushed back. Adding
+a type is one line in `objects.py`.
 
 ## Status
 

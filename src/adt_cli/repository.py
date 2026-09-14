@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
+from typing import Callable
 
 from adt_cli import objects
 from adt_cli.session import AdtSession
@@ -83,23 +84,37 @@ async def list_package(
 
 
 async def fetch_sources(
-    session: AdtSession, items: list[RepoObject], *, concurrency: int = 16
+    session: AdtSession,
+    items: list[RepoObject],
+    *,
+    concurrency: int = 16,
+    on_progress: Callable[[Fetched], None] | None = None,
 ) -> list[Fetched]:
-    """Download the text of every source-based object, in parallel."""
+    """Download every object in parallel.
+
+    Source-based objects get their editable text. Non-source objects (service
+    bindings, message classes, packages, ...) have no ``/source/main`` - their
+    ADT metadata XML is pulled instead, so every listed object lands on disk.
+
+    ``on_progress``, if given, fires once per object as soon as it lands, so a
+    caller can drive a progress bar without waiting for the whole batch.
+    """
     gate = asyncio.Semaphore(concurrency)
 
     async def one(obj: RepoObject) -> Fetched:
         kind = obj.kind
-        if not kind.is_source:
-            return Fetched(obj, "", "not a source object")
+        uri = objects.source_uri(obj.uri, kind) if kind.is_source else obj.uri
+        accept = "text/plain" if kind.is_source else "*/*"
         async with gate:
             try:
-                reply = await session.get(
-                    objects.source_uri(obj.uri, kind), accept="text/plain"
-                )
+                reply = await session.get(uri, accept=accept)
             except Exception as exc:  # noqa: BLE001 - reported per object, never fatal
-                return Fetched(obj, "", str(exc))
-        return Fetched(obj, normalise(reply.text))
+                result = Fetched(obj, "", str(exc))
+            else:
+                result = Fetched(obj, normalise(reply.text))
+        if on_progress:
+            on_progress(result)
+        return result
 
     return list(await asyncio.gather(*(one(item) for item in items)))
 
