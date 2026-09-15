@@ -74,8 +74,8 @@ and leaves the thinking to you and your tools.
 │              │   │ Existing SAP Tools │
 │ Source code  │   │                    │
 │ pull / push  │   │ Operations not yet │
-│ status       │   │ supported by CLI   │
-│ drift check  │   │                    │
+│ status/diff  │   │ supported by CLI   │
+│ activate     │   │                    │
 └──────┬───────┘   └─────────┬──────────┘
        │                     │
        └──────────┬──────────┘
@@ -161,7 +161,7 @@ For normal source-code changes:
 abap status
 abap status --remote
 abap diff
-abap push --transport DHAK900123
+abap push --transport DHAK900123 --activate
 ```
 
 But some SAP operations may still require **MCP, ADT/Eclipse, SAP GUI, or other
@@ -820,15 +820,20 @@ abap pull ZGET_SUBS_API_V2
 abap pull   →  POST /repository/informationsystem/virtualfolders/contents   (1 request)
             →  GET  <object>/source/main                                    (parallel)
 
+abap diff   →  GET  <object>/source/main                 (parallel, text kept)
+
 abap push   →  GET  <object>/source/main                 (drift check, parallel)
+            →  POST /cts/transportchecks                 (which request owns it)
             →  POST <object>?_action=LOCK                (stateful, serialised)
             →  PUT  <object>/source/main?lockHandle=...&corrNr=...
             →  POST <object>?_action=UNLOCK
+            →  POST /activation                          (--activate, one batch)
 ```
 
 Reads are stateless so they parallelise. Locks are session-bound, so writes are
 serialised and the session always returns to stateless afterwards, releasing any
-server-side enqueue.
+server-side enqueue. Activation comes last and in a single call, because SAP
+refuses to activate a locked object and resolves dependency order itself.
 
 Transport granularity is not something this CLI implements — it falls out of
 using the same API Eclipse does. SAP decides which includes actually changed and
