@@ -86,6 +86,30 @@ and leaves the thinking to you and your tools.
              └─────────┘
 ```
 
+### Reviewing before you push
+
+The two review tools answer different questions.
+
+`abap status` tells you **which** objects you changed. It hashes every file
+against the manifest baseline recorded at pull time, so it needs no git
+repository and works offline.
+
+It does not show **what** changed inside a file. For that, make the pulled folder
+a git repo once, straight after the first pull:
+
+```bash
+cd ~/Documents/ZGET_SUBS_API_V2
+git init && git add -A && git commit -m "baseline: pulled from dha-110"
+```
+
+From then on `git diff` shows every changed line — which matters most when an AI
+assistant edited the files and you want to see exactly what it touched before it
+reaches SAP. `git checkout -- <file>` throws a change away.
+
+Git is entirely optional: `abap status` plus `abap push --dry-run` already tell
+you which objects would be sent. Adding git just buys you the line-level diff and
+a local history.
+
 ### Why hybrid push?
 
 For normal source-code changes:
