@@ -325,6 +325,10 @@ abap --trace push --transport DHAK900123
 | `abap diff` | line-level differences against the server copy |
 | `abap push` | upload changed objects |
 | `abap push --activate` | ...and activate just those objects afterwards |
+| `abap delete NAME...` | delete objects from SAP and the workspace |
+| `abap transport TR list` | what a request contains |
+| `abap transport TR add NAME...` | add objects, whole or method-level |
+| `abap transport TR remove NAME...` | remove objects from a request |
 | `abap version` | show the CLI version |
 
 Every command that talks to SAP also takes `--system` / `-s` and `--trace`.
@@ -904,7 +908,112 @@ including method-level transport entries, the transport guard and conflict
 detection.
 
 Not yet implemented: where-used, syntax check, unit test runs, transport
-creation, object deletion.
+creation.
+
+## Deleting
+
+Deletion is the one irreversible thing here, so it is deliberately awkward: it
+takes object *names* rather than file paths, only accepts objects the workspace
+already tracks, and asks before it acts.
+
+```console
+$ abap delete ZCL_CLI_TR_DEMO
+  D  ZCL_CLI_TR_DEMO  (src/zcl_cli_tr_demo.clas.abap)
+
+This deletes 1 object(s) from dha-110. Deleted objects cannot be restored by this CLI.
+Continue? [y/N]: y
+using DHAK907262 (VAIBHAGO, 'Testing 2') - it already holds these objects
+  recording under your task DHAK907263
+  deleted ZCL_CLI_TR_DEMO
+
+1 object(s) deleted
+```
+
+`--dry-run` lists and stops; `--yes` skips the prompt for scripts. The same
+transport rules as push apply, because a deletion has to be recorded somewhere
+before it can reach the next system — see [Guard rails](#guard-rails). On
+success the local file and its manifest entry go too, so `status` stays clean.
+
+A name the workspace does not track is refused rather than guessed at:
+
+```console
+$ abap delete ZCL_NOT_HERE
+  !  ZCL_NOT_HERE is not in this workspace
+error only objects tracked by the workspace can be deleted - re-pull first
+```
+
+## Transports
+
+`abap transport` inspects a request, and adds or removes objects in it:
+
+```console
+$ abap transport DHAK907262 list
+task DHAK907263  VAIBHAGO  Modifiable
+  locked  R3TR CLAS ZCL_SUBS_QUERY_PROVIDER
+  locked  R3TR DDLS ZCE_HEADER
+
+2 object(s) in DHAK907262
+
+$ abap transport DHAK907274 add ZCL_TSTMP_UTILITIES
+  +  R3TR CLAS ZCL_TSTMP_UTILITIES
+
+1 object(s) in DHAK907274
+```
+
+Objects live in *tasks*, not requests, so a request number is resolved to the
+task you own before anything is written.
+
+### Naming what to add
+
+Three forms, because not every entry is a whole object:
+
+| Form | Records | Example |
+| --- | --- | --- |
+| `NAME` | `R3TR` + the type from the workspace manifest | `ZCL_TSTMP_UTILITIES` |
+| `CLASS=>METHOD` | `LIMU METH` — one method on its own | `ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET` |
+| `PGMID:TYPE:NAME` | exactly what you type | `R3TR:TABL:ZMY_TABLE` |
+
+The method form is the one that matters for shared classes, and produces the
+same entry SAP writes when you edit a single method in Eclipse:
+
+```console
+$ abap transport DHAK907275 add 'ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET'
+  +  LIMU METH ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
+
+1 object(s) in DHAK907275
+```
+
+That spacing is not cosmetic: SAP stores a `LIMU METH` key as the class name
+padded to 30 characters followed by the method, so the CLI builds it that way.
+Interface implementations work through the same form —
+`ZCL_THING=>ZIF_THING~DO_IT`.
+
+Quote the argument. `=>` means nothing to zsh or bash, but shells differ and a
+stray `>` would redirect to a file.
+
+The plain `NAME` form needs the object in the workspace, since that is where its
+type comes from. `PGMID:TYPE:NAME` is the escape hatch when it is not, or when
+you want an entry the CLI would never infer. Types for `remove` come from the
+request itself, so an entry can still be named after its object is gone.
+
+**Removing works, and is addressed by position.** SAP identifies an entry by its
+position in the request, not by name, so the current contents are read
+immediately before the write — positions shift as entries go:
+
+```console
+$ abap transport DHAK907262 remove ZCL_PUSH_NEW_TEST ZCE_PUSH_NEW_TEST
+  -  R3TR CLAS ZCL_PUSH_NEW_TEST removed
+  -  R3TR DDLS ZCE_PUSH_NEW_TEST removed
+
+2 object(s) removed from DHAK907262
+```
+
+The result is read back afterwards rather than trusting the `200`: omit the
+position and SAP answers `200` and does nothing at all, so anything still in the
+request is reported as a failure instead of a success.
+
+Removing an object's only entry releases its lock, which is how you hand a class
+back without releasing the whole request.
 
 ## Licence
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import typer
 
 from adt_cli import __version__, runtime, ui
-from adt_cli.commands import profiles, review
+from adt_cli.commands import objects_cmd, profiles, review
 from adt_cli.commands import pull as pull_cmd
 from adt_cli.commands import push as push_cmd
 from adt_cli.commands.options import TraceOpt
@@ -43,3 +43,5 @@ app.command()(pull_cmd.pull)
 app.command()(review.status)
 app.command()(review.diff)
 app.command()(push_cmd.push)
+app.command()(objects_cmd.delete)
+app.command()(objects_cmd.transport)
