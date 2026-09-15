@@ -50,6 +50,8 @@ _TYPES: tuple[ObjectType, ...] = (
     ObjectType("DTEL/DE", ".dtel.asddls", "Dictionary/Data Elements"),
     ObjectType("DOMA/DD", ".doma.asddls", "Dictionary/Domains"),
     # --- Non-source objects: metadata XML pulled, not writable by push -----
+    ObjectType("VIEW/DV", ".view.xml", "Dictionary/Views", "", False),
+    ObjectType("ENHO/XHB", ".enho.xml", "Enhancements", "", False),
     ObjectType("SRVB/SVB", ".srvb.xml", "Business Services/Service Bindings", "", False),
     ObjectType("MSAG/N", ".msag.xml", "Message Classes", "", False),
     ObjectType("DEVC/K", ".devc.xml", "Packages", "", False),

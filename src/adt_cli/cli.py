@@ -45,6 +45,16 @@ TraceOpt = Annotated[
 _trace_enabled = False
 
 
+def _parse_types(raw: str) -> list[str]:
+    return [part.strip().upper() for part in raw.split(",") if part.strip()]
+
+
+def _wanted_type(code: str, wanted: list[str]) -> bool:
+    """Accepts both the full ADT code and its bare form: CLAS/OC and CLAS."""
+    code = code.upper()
+    return code in wanted or code.split("/", 1)[0] in wanted
+
+
 def _set_trace(enabled: bool) -> None:
     """Accepted either side of the subcommand: 'abap --trace push' and 'abap push --trace'."""
     global _trace_enabled
@@ -258,6 +268,22 @@ def pull(
     ] = None,
     jobs: Annotated[int, typer.Option("--jobs", "-j", help="Parallel requests.")] = 16,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite local changes.")] = False,
+    match: Annotated[
+        str,
+        typer.Option("--match", "-m", help="Object name pattern, e.g. 'ZCL_SUBS*'."),
+    ] = "",
+    types: Annotated[
+        str,
+        typer.Option("--type", "-t", help="Comma-separated ADT types, e.g. 'CLAS,DDLS'."),
+    ] = "",
+    user: Annotated[
+        str,
+        typer.Option(
+            "--user",
+            "-u",
+            help="Object owner. Defaults to you for local $ packages; '*' means everyone.",
+        ),
+    ] = "",
     trace: TraceOpt = False,
 ) -> None:
     """Download a package into a local folder, in parallel."""
@@ -283,15 +309,38 @@ def pull(
             )
 
     layout_se80 = previous.se80 if se80 is None else se80
+    # A refresh keeps whatever narrowed the original pull, so it cannot silently widen.
+    pattern = match or previous.match
+    wanted = _parse_types(types) or previous.types
     target, password = _connect(system or previous.system)
     started = time.perf_counter()
 
+    # $TMP is one package shared by every developer, so narrow it to your own
+    # objects unless asked otherwise. '*' is the explicit way back to everybody.
+    owner = user or previous.owner
+    if not owner and package.startswith("$"):
+        owner = target.user
+    owner_filter = "" if owner == "*" else owner.upper()
+
     async def run() -> tuple[Workspace, list[repository.Fetched]]:
         async with _session(target, password, jobs) as adt:
-            console.print(f"[dim]connected to {target.name}, listing {package}...[/]")
-            found = await repository.list_package(adt, package)
+            scope = f" owned by {owner_filter}" if owner_filter else ""
+            console.print(f"[dim]connected to {target.name}, listing {package}{scope}...[/]")
+            found = await repository.list_package(
+                adt, package, pattern=pattern or "*", owner=owner_filter
+            )
+            if wanted:
+                found = [obj for obj in found if _wanted_type(obj.type_code, wanted)]
+            if not found:
+                _fail(f"nothing in {package.upper()} matched")
             space = Workspace(
-                root=root, package=package.upper(), system=target.name, se80=layout_se80
+                root=root,
+                package=package.upper(),
+                system=target.name,
+                se80=layout_se80,
+                match=pattern,
+                types=wanted,
+                owner=owner,
             )
             with Progress(
                 SpinnerColumn(),

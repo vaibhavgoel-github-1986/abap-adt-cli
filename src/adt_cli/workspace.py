@@ -38,6 +38,9 @@ class Workspace:
     system: str = ""
     pulled_at: str = ""
     se80: bool = False
+    match: str = ""
+    types: list[str] = field(default_factory=list)
+    owner: str = ""
     files: dict[str, Entry] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ storage
@@ -62,6 +65,9 @@ class Workspace:
             system=raw.get("system", ""),
             pulled_at=raw.get("pulled_at", ""),
             se80=raw.get("se80", False),
+            match=raw.get("match", ""),
+            types=list(raw.get("types", [])),
+            owner=raw.get("owner", ""),
             files={
                 local: Entry(
                     name=meta["name"],
@@ -83,6 +89,9 @@ class Workspace:
                     "system": self.system,
                     "pulled_at": self.pulled_at,
                     "se80": self.se80,
+                    "match": self.match,
+                    "types": self.types,
+                    "owner": self.owner,
                     "files": {
                         local: {
                             "name": entry.name,

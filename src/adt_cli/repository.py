@@ -50,26 +50,35 @@ def normalise(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _request_body(package: str, pattern: str) -> str:
+def _request_body(package: str, pattern: str, owner: str) -> str:
+    preselection = (
+        '  <vfs:preselection facet="package">\n'
+        f"    <vfs:value>{package}</vfs:value>\n"
+        "  </vfs:preselection>\n"
+    )
+    if owner:
+        preselection += (
+            '  <vfs:preselection facet="owner">\n'
+            f"    <vfs:value>{owner}</vfs:value>\n"
+            "  </vfs:preselection>\n"
+        )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<vfs:virtualFoldersRequest xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"'
         f' objectSearchPattern="{pattern}">\n'
-        '  <vfs:preselection facet="package">\n'
-        f"    <vfs:value>{package}</vfs:value>\n"
-        "  </vfs:preselection>\n"
+        f"{preselection}"
         "  <vfs:facetorder/>\n"
         "</vfs:virtualFoldersRequest>"
     )
 
 
 async def list_package(
-    session: AdtSession, package: str, pattern: str = "*"
+    session: AdtSession, package: str, pattern: str = "*", owner: str = ""
 ) -> list[RepoObject]:
     """Every object in a package, in a single round trip."""
     reply = await session.post(
         VIRTUAL_FOLDERS,
-        content=_request_body(package.upper(), pattern),
+        content=_request_body(package.upper(), pattern, owner.upper()),
         content_type=REQUEST_TYPE,
         accept=RESULT_TYPE,
     )
