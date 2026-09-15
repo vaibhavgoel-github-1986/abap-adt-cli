@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import shutil
 import subprocess
 import time
@@ -53,6 +54,20 @@ def _wanted_type(code: str, wanted: list[str]) -> bool:
     """Accepts both the full ADT code and its bare form: CLAS/OC and CLAS."""
     code = code.upper()
     return code in wanted or code.split("/", 1)[0] in wanted
+
+
+def _show_blanks(text: str) -> str:
+    """A trailing-space-only change is invisible in a diff, so spell it out."""
+    body = text.rstrip(" \t")
+    return body + text[len(body) :].replace("\t", "→").replace(" ", "·")
+
+
+def _hunk_line(header: str) -> str:
+    """'@@ -8,7 +8,7 @@' carries a line number nobody should have to decode."""
+    parts = header.split()
+    if len(parts) > 2 and parts[2].startswith("+"):
+        return f"  line {parts[2][1:].split(',')[0]}"
+    return header
 
 
 def _set_trace(enabled: bool) -> None:
@@ -447,6 +462,111 @@ def status(
     if conflicts:
         console.print(
             f"[red]{len(conflicts)} conflict(s)[/] - push will refuse these until you re-pull"
+        )
+
+
+@app.command()
+def diff(
+    package: PackageArg = "",
+    system: SystemOpt = "",
+    dest: Optional[Path] = typer.Option(None, "--dest", "-d", help="Local folder."),
+    jobs: Annotated[int, typer.Option("--jobs", "-j", help="Parallel requests.")] = 16,
+    trace: TraceOpt = False,
+) -> None:
+    """Show line differences between the server and your local files."""
+    _set_trace(trace)
+    root = _resolve_root(dest, package)
+    space = Workspace.load(root)
+    if not space.exists:
+        _fail(f"no manifest in {root}, run 'abap pull' first")
+
+    # The manifest keeps hashes, not text, so the comparison has to come from the
+    # server. Same fetch status --remote does, kept instead of discarded.
+    tracked = [local for local in sorted(space.files) if space.writable(local)]
+    present = [local for local in tracked if (root / local).is_file()]
+    for local in tracked:
+        if local not in present:
+            console.print(f"  [red]D[/]  {local} deleted locally, skipped")
+    if not present:
+        console.print("nothing to compare")
+        return
+
+    target, password = _connect(system or space.system)
+
+    async def run() -> list[repository.Fetched]:
+        async with _session(target, password, jobs) as adt:
+            return await repository.fetch_sources(
+                adt, [space.object_for(local) for local in present], concurrency=jobs
+            )
+
+    try:
+        results = asyncio.run(run())
+    except AdtError as exc:
+        _fail(str(exc))
+        return
+
+    changed = 0
+    overwrites = 0
+    for local, result in zip(present, results):
+        if not result.ok:
+            err_console.print(f"  [yellow]?[/]  {local} could not be read: {result.error}")
+            continue
+        mine = (root / local).read_text(encoding="utf-8")
+        if mine == result.text:
+            continue
+        changed += 1
+        if changed == 1:
+            console.print(
+                f"[dim]'-' is {target.name} as it stands now, "
+                "'+' is your local copy - what push would make it[/]"
+            )
+            console.print("[dim]trailing spaces shown as ·, tabs as →[/]\n")
+        # The baseline hash is the only thing that can say who moved.
+        base = space.files[local].sha256
+        yours = workspace.sha256(mine) != base
+        theirs = workspace.sha256(result.text) != base
+        if yours and theirs:
+            marker, note = "[red]C[/]", f"changed by you AND on {target.name}"
+        elif theirs:
+            marker, note = "[blue]R[/]", f"changed on {target.name}, not by you"
+        else:
+            marker, note = "[yellow]M[/]", "changed by you"
+        if theirs:
+            overwrites += 1
+        if mine.split() == result.text.split():
+            note += ", whitespace only"
+        console.print(f"  {marker}  {local}  [dim]({note})[/]")
+        # The first two entries are the ---/+++ headers, replaced by the note above.
+        for line in list(
+            difflib.unified_diff(result.text.splitlines(), mine.splitlines(), lineterm="")
+        )[2:]:
+            if line.startswith("@@"):
+                console.print(_hunk_line(line), style="cyan", markup=False, highlight=False)
+                continue
+            if line.startswith("+"):
+                style = "green"
+            elif line.startswith("-"):
+                style = "red"
+            else:
+                # Context lines are shown as-is; marking their blanks is just noise.
+                console.print(line, markup=False, highlight=False)
+                continue
+            console.print(
+                line[:1] + _show_blanks(line[1:]),
+                style=style,
+                markup=False,
+                highlight=False,
+            )
+        console.print()
+
+    if not changed:
+        console.print(f"[green]no differences[/] - local files match {target.name}")
+        return
+    console.print(f"{changed} object(s) differ from {target.name}")
+    if overwrites:
+        console.print(
+            f"[red]{overwrites} of them changed on {target.name} since your pull[/] - "
+            "pushing would overwrite that work, re-pull instead"
         )
 
 

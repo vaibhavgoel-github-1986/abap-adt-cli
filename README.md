@@ -58,7 +58,7 @@ and leaves the thinking to you and your tools.
 ┌──────────────────────┐
 │   Developer Review   │
 │                      │
-│  git diff            │
+│  abap diff           │
 │  abap status         │
 │  approve changes     │
 └─────────┬────────────┘
@@ -88,27 +88,70 @@ and leaves the thinking to you and your tools.
 
 ### Reviewing before you push
 
-The two review tools answer different questions.
+Two commands, two different questions.
 
 `abap status` tells you **which** objects you changed. It hashes every file
-against the manifest baseline recorded at pull time, so it needs no git
-repository and works offline.
+against the manifest baseline recorded at pull time, so it needs no network and
+no git repository.
 
-It does not show **what** changed inside a file. For that, make the pulled folder
-a git repo once, straight after the first pull:
+`abap diff` shows **what** changed, line by line, against the copy currently in
+SAP — and, from the manifest baseline, **who** changed it:
+
+```console
+$ abap diff
+'-' is dha-110 as it stands now, '+' is your local copy - what push would make it
+trailing spaces shown as ·, tabs as →
+
+  R  src/zcds_i_cont_billsch.ddls.asddls  (changed on dha-110, not by you)
+  line 8
+   as select from zdt_cont_billsch
+
+ {
+-  key object_id,  //changes
++  key object_id,
+   key number_int,
+  line 18
+       cycle_start_date,
+-      cycle_end_date··
++      cycle_end_date
+ }
+
+1 object(s) differ from dha-110
+1 of them changed on dha-110 since your pull - pushing would overwrite that work, re-pull instead
+```
+
+Two readability details, because an ABAP diff is often whitespace: changed lines
+show trailing spaces as `·` and tabs as `→`, so an invisible edit is visible, and
+a file whose only difference is spacing is flagged `whitespace only`. Hunk
+positions are printed as plain `line 18` rather than `@@ -18,5 +18,5 @@`.
+
+The marker is the important part, because a diff on its own cannot tell you which
+side moved:
+
+| Marker | Meaning |
+| --- | --- |
+| `M` | you changed it; `+` is your edit, ready to push |
+| `R` | somebody changed it in SAP and you did not; `-` is their work, and pushing would wipe it |
+| `C` | both sides changed it |
+
+In the example above someone edited the view in SAP GUI. The `-` line is *their*
+change and the `+` line is your untouched copy, so pushing would silently revert
+them — hence the warning. Re-pull instead.
+
+The manifest stores hashes, not text, so `diff` fetches the server copy. That is
+the same request `status --remote` makes, kept rather than discarded, and costs
+one GET per tracked object.
+
+Git is still worth adding on top if you want local history and revert:
 
 ```bash
 cd ~/Documents/ZGET_SUBS_API_V2
 git init && git add -A && git commit -m "baseline: pulled from dha-110"
 ```
 
-From then on `git diff` shows every changed line — which matters most when an AI
-assistant edited the files and you want to see exactly what it touched before it
-reaches SAP. `git checkout -- <file>` throws a change away.
-
-Git is entirely optional: `abap status` plus `abap push --dry-run` already tell
-you which objects would be sent. Adding git just buys you the line-level diff and
-a local history.
+That buys `git diff` offline, plus `git checkout -- <file>` to throw a change
+away. Entirely optional — `abap diff`, `abap status` and `abap push --dry-run`
+cover review on their own.
 
 ### Why hybrid push?
 
@@ -117,6 +160,7 @@ For normal source-code changes:
 ```bash
 abap status
 abap status --remote
+abap diff
 abap push --transport DHAK900123
 ```
 
@@ -273,6 +317,7 @@ abap --trace push --transport DHAK900123
 | `abap pull [PACKAGE] --match / --type / --user` | download only part of one |
 | `abap status` | locally modified objects, offline |
 | `abap status --remote` | also report what changed on the server |
+| `abap diff` | line-level differences against the server copy |
 | `abap push` | upload changed objects |
 | `abap version` | show the CLI version |
 
