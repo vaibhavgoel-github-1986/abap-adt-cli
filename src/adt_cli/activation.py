@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from adt_cli import xmlutil
 from adt_cli.repository import RepoObject
 from adt_cli.session import AdtSession
 
@@ -37,7 +38,8 @@ class Outcome:
 
 def _body(objects: list[RepoObject]) -> str:
     references = "".join(
-        f'<adtcore:objectReference adtcore:uri="{obj.uri}" adtcore:name="{obj.name}"/>'
+        "<adtcore:objectReference "
+        f"adtcore:uri={xmlutil.attr(obj.uri)} adtcore:name={xmlutil.attr(obj.name)}/>"
         for obj in objects
     )
     return (
@@ -76,6 +78,8 @@ def _parse(xml: str) -> Outcome:
 
 async def activate(session: AdtSession, objects: list[RepoObject]) -> Outcome:
     """Activate every object in one run, the way Eclipse's mass activation does."""
+    if not objects:
+        return Outcome(executed=True)
     reply = await session.post(
         ACTIVATION,
         params={"method": "activate", "preauditRequested": "true"},

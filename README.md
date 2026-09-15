@@ -488,6 +488,45 @@ the first five happen before any network call:
 Pushed objects stay **inactive** until something activates them. Add
 `--activate` to do it in the same run — see [Activating](#activating).
 
+### New objects
+
+A file that the manifest has never seen is a new object. Drop it in `src/` with
+the right name and extension and push creates it in SAP first, then writes the
+source into it — the same two steps Eclipse performs when you add a class:
+
+```console
+$ abap status
+  A  src/zce_push_new_test.ddls.asddls  (new, not in SAP yet)
+  A  src/zcl_push_new_test.clas.abap  (new, not in SAP yet)
+
+0 modified, 2 new, 0 deleted
+
+$ abap push --transport DHAK907262 --activate
+  A  src/zce_push_new_test.ddls.asddls  (new)
+  A  src/zcl_push_new_test.clas.abap  (new)
+  created ZCE_PUSH_NEW_TEST
+  created ZCL_PUSH_NEW_TEST
+
+activating 2 object(s)...
+
+2 object(s) pushed
+activated 2 object(s) on dha-110
+```
+
+The object name comes from the filename and the type from the extension, so
+`zcl_thing.clas.abap` becomes class `ZCL_THING`. It lands in the workspace's
+package, under the transport push resolved. Descriptions are taken from
+`@EndUserText.label` where the source has one, and default to the object name
+otherwise.
+
+Creatable types are classes, interfaces, programs, CDS data definitions,
+metadata extensions, access controls and service definitions. A new file of any
+other type is refused by name rather than ignored — create it in Eclipse/ADT
+once, then re-pull.
+
+Files in dot-directories are never considered, so `.git` and `.adt` stay out of
+it. Deleting a file still does nothing: push never deletes objects in SAP.
+
 ## Activating
 
 A push leaves inactive versions behind, exactly as editing in Eclipse does.
@@ -643,6 +682,7 @@ three cases:
 | Marker | Meaning |
 | --- | --- |
 | `M` | you changed it |
+| `A` | a new file, not in SAP yet |
 | `R` | somebody else changed it on the server, you did not |
 | `C` | conflict — changed in both places |
 
@@ -864,7 +904,7 @@ including method-level transport entries, the transport guard and conflict
 detection.
 
 Not yet implemented: where-used, syntax check, unit test runs, transport
-creation, object creation and deletion.
+creation, object deletion.
 
 ## Licence
 

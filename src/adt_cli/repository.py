@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from adt_cli import objects
+import httpx
+
+from adt_cli import objects, xmlutil
+from adt_cli.errors import AdtError
 from adt_cli.session import AdtSession
 
 VIRTUAL_FOLDERS = "/sap/bc/adt/repository/informationsystem/virtualfolders/contents"
@@ -16,6 +19,7 @@ RESULT_TYPE = "application/vnd.sap.adt.repository.virtualfolders.result.v1+xml"
 
 _OBJECT = re.compile(r"<vfs:object\b([^>]*)/?>")
 _ATTR = re.compile(r'(\w+)="([^"]*)"')
+_UNSAFE_IN_FILENAME = re.compile(r"[^a-z0-9_$#\-.]")
 
 
 @dataclass
@@ -30,7 +34,15 @@ class RepoObject:
 
     @property
     def filename(self) -> str:
-        return f"{self.name.lower()}{self.kind.extension}"
+        """Local file name.
+
+        Object names come from the server, so anything that could climb out of
+        the workspace folder is rewritten rather than trusted. '/' appears in
+        namespaced names and becomes '#', the way SE80 spells it.
+        """
+        stem = _UNSAFE_IN_FILENAME.sub("_", self.name.lower().replace("/", "#"))
+        stem = stem.strip(".").replace("..", "_")
+        return f"{stem or 'unnamed'}{self.kind.extension}"
 
 
 @dataclass
@@ -53,19 +65,19 @@ def normalise(text: str) -> str:
 def _request_body(package: str, pattern: str, owner: str) -> str:
     preselection = (
         '  <vfs:preselection facet="package">\n'
-        f"    <vfs:value>{package}</vfs:value>\n"
+        f"    <vfs:value>{xmlutil.text(package)}</vfs:value>\n"
         "  </vfs:preselection>\n"
     )
     if owner:
         preselection += (
             '  <vfs:preselection facet="owner">\n'
-            f"    <vfs:value>{owner}</vfs:value>\n"
+            f"    <vfs:value>{xmlutil.text(owner)}</vfs:value>\n"
             "  </vfs:preselection>\n"
         )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<vfs:virtualFoldersRequest xmlns:vfs="http://www.sap.com/adt/ris/virtualFolders"'
-        f' objectSearchPattern="{pattern}">\n'
+        f" objectSearchPattern={xmlutil.attr(pattern)}>\n"
         f"{preselection}"
         "  <vfs:facetorder/>\n"
         "</vfs:virtualFoldersRequest>"
@@ -108,7 +120,7 @@ async def fetch_sources(
     ``on_progress``, if given, fires once per object as soon as it lands, so a
     caller can drive a progress bar without waiting for the whole batch.
     """
-    gate = asyncio.Semaphore(concurrency)
+    gate = asyncio.Semaphore(max(1, concurrency))
 
     async def one(obj: RepoObject) -> Fetched:
         kind = obj.kind
@@ -117,7 +129,7 @@ async def fetch_sources(
         async with gate:
             try:
                 reply = await session.get(uri, accept=accept)
-            except Exception as exc:  # noqa: BLE001 - reported per object, never fatal
+            except (AdtError, httpx.HTTPError) as exc:  # reported per object, never fatal
                 result = Fetched(obj, "", str(exc))
             else:
                 result = Fetched(obj, normalise(reply.text))
@@ -148,6 +160,8 @@ async def write_source(
     the individual includes that actually differ, which is how a one-method edit
     ends up as a single LIMU METH entry instead of locking the whole class.
     """
+    if not obj.kind.writable:
+        raise AdtError(f"{obj.name} is a {obj.type_code} object and has no writable source")
     async with session.locked(obj.uri) as lock:
         params = {"lockHandle": lock.handle}
         if transport:

@@ -78,6 +78,18 @@ def known_codes() -> list[str]:
     return sorted(_BY_CODE)
 
 
+def type_for_file(filename: str) -> ObjectType | None:
+    """Reverse of the naming scheme, for files SAP has never seen."""
+    for entry in _TYPES:
+        if filename.endswith(entry.extension):
+            return entry
+    return None
+
+
+def name_for_file(filename: str, kind: ObjectType) -> str:
+    return filename.rsplit("/", 1)[-1][: -len(kind.extension)].upper()
+
+
 def source_uri(object_uri: str, kind: ObjectType) -> str:
     """Absolute URI of the editable text for an object."""
     if not kind.is_source:
