@@ -290,12 +290,11 @@ abap push --transport DHAK907258
 1 object(s) pushed
 ```
 
-Pushed objects stay **inactive** until activated, so either push and activate in
-one go, or activate the whole workspace afterwards:
+Pushed objects stay **inactive** until activated. Add `--activate` and push
+activates exactly what it just wrote:
 
 ```bash
 abap push --transport DHAK907258 --activate
-abap activate
 ```
 
 Three options are worth knowing from the start:
@@ -325,8 +324,7 @@ abap --trace push --transport DHAK900123
 | `abap status --remote` | also report what changed on the server |
 | `abap diff` | line-level differences against the server copy |
 | `abap push` | upload changed objects |
-| `abap push --activate` | ...and activate them in the same run |
-| `abap activate` | activate every source object in the workspace |
+| `abap push --activate` | ...and activate just those objects afterwards |
 | `abap version` | show the CLI version |
 
 Every command that talks to SAP also takes `--system` / `-s` and `--trace`.
@@ -483,31 +481,17 @@ the first five happen before any network call:
 | `abap push --dry-run` | lists exactly what would be sent and stops. Fully offline — it makes no ADT calls at all |
 | `abap push --force` | skips the drift check and overwrites whatever is on the server. Use only when you know your copy should win |
 | `abap push --dest <path>` | pushes the workspace at that path instead of the current directory |
-| `abap push --activate` | activates everything it pushed, in one run afterwards |
+| `abap push --activate` | activates the objects it just pushed, in one run afterwards |
 | `abap push --system <name>` | only accepted when `<name>` is the system the workspace was pulled from; anything else is refused |
 | `abap push --trace` | prints every lock, PUT and unlock with full payloads |
 
 Pushed objects stay **inactive** until something activates them. Add
-`--activate` to do it in the same run, or run `abap activate` later — see
-[Activating](#activating).
+`--activate` to do it in the same run — see [Activating](#activating).
 
 ## Activating
 
-A push leaves inactive versions behind, exactly as editing in Eclipse does. One
-run activates the whole batch:
-
-```console
-$ abap activate
-activating 28 object(s) on dha-110...
-activated 28 object(s) on dha-110
-```
-
-`abap activate` covers every source object in the workspace, which is what you
-want after a mass change — SAP resolves the order itself, so a CDS view and the
-class that selects from it activate together rather than failing on sequence.
-Non-source objects are skipped.
-
-To push and activate in one step:
+A push leaves inactive versions behind, exactly as editing in Eclipse does.
+`--activate` finishes the job in the same run:
 
 ```console
 $ abap push --activate
@@ -522,19 +506,32 @@ activating 1 object(s)...
 activated 1 object(s) on dha-110
 ```
 
-Activation only ever runs after every write has completed and unlocked, because
-SAP refuses to activate a locked object.
+It activates **only the objects that were just pushed**, never the whole
+workspace — activating a package you did not touch is a good way to turn a
+colleague's half-finished object into an active one. There is deliberately no
+`abap activate` command for that reason.
 
-Syntax and semantic errors are reported and leave the objects inactive, with a
-non-zero exit status so a script stops:
+Everything pushed goes into a single activation run, which is what you want after
+a mass change: SAP resolves the order itself, so a CDS view and the class that
+selects from it activate together rather than failing on sequence. Activation
+only starts once every write has completed and unlocked, because SAP refuses to
+activate a locked object.
+
+Errors are reported per object, with the line number where SAP has one, and the
+command exits non-zero so a script stops:
 
 ```console
-$ abap activate
-  !  Field "LV_MISSING" is unknown.
+$ abap push --activate
+  pushed ZCL_TSTMP_UTILITIES
+
+activating 1 object(s)...
+  !  CLAS ZCL_TSTMP_UTILITIES line 42: Field "LV_MISSING" is unknown.
 error 1 activation error(s) - the objects stay inactive until they are fixed
 ```
 
-Warnings are printed but do not fail the run.
+The source is still in SAP and still in the transport at that point; only the
+active version is unchanged. Fix the file locally and push again. Warnings are
+printed but do not fail the run.
 
 ## Guard rails
 

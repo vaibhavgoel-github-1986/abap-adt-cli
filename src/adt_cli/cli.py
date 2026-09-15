@@ -589,43 +589,6 @@ def _report_activation(outcome: activation.Outcome, count: int, system: str) -> 
 
 
 @app.command()
-def activate(
-    package: PackageArg = "",
-    system: SystemOpt = "",
-    dest: Optional[Path] = typer.Option(None, "--dest", "-d", help="Local folder."),
-    trace: TraceOpt = False,
-) -> None:
-    """Activate every source object in the workspace, in one run."""
-    _set_trace(trace)
-    root = _resolve_root(dest, package)
-    space = Workspace.load(root)
-    if not space.exists:
-        _fail(f"no manifest in {root}, run 'abap pull' first")
-
-    targets = [
-        space.object_for(local) for local in sorted(space.files) if space.writable(local)
-    ]
-    if not targets:
-        console.print("nothing to activate - no source objects in this workspace")
-        return
-
-    target, password = _connect(system or space.system)
-    console.print(f"activating {len(targets)} object(s) on {target.name}...")
-
-    async def run() -> activation.Outcome:
-        async with _session(target, password) as adt:
-            return await activation.activate(adt, targets)
-
-    try:
-        outcome = asyncio.run(run())
-    except AdtError as exc:
-        _fail(str(exc))
-        return
-    if not _report_activation(outcome, len(targets), target.name):
-        raise typer.Exit(1)
-
-
-@app.command()
 def push(
     package: PackageArg = "",
     system: Annotated[

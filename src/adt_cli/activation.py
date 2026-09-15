@@ -16,8 +16,10 @@ ACTIVATION = "/sap/bc/adt/activation"
 
 _PROPERTIES = re.compile(r"<(?:\w+:)?properties\b([^>]*)/?>")
 _ATTR = re.compile(r'([\w:]+)="([^"]*)"')
-_MESSAGE = re.compile(r"<(?:\w+:)?message\b([^>]*)>(.*?)</(?:\w+:)?message>", re.S)
-_TYPE = re.compile(r'(?:^|\s)(?:\w+:)?type="([^"]*)"')
+# SAP returns <msg .../>, not <chkl:message>, and sometimes self-closed.
+_MESSAGE = re.compile(
+    r"<(?:\w+:)?(?:msg|message)\b([^>]*?)(?:/>|>(.*?)</(?:\w+:)?(?:msg|message)>)", re.S
+)
 _SHORT_TEXT = re.compile(r"<(?:\w+:)?shortText[^>]*>(.*?)</(?:\w+:)?shortText>", re.S)
 _MARKUP = re.compile(r"<[^>]+>")
 
@@ -48,21 +50,27 @@ def _body(objects: list[RepoObject]) -> str:
 def _parse(xml: str) -> Outcome:
     properties = _PROPERTIES.search(xml)
     flags = dict(_ATTR.findall(properties.group(1))) if properties else {}
-    outcome = Outcome(
-        executed=flags.get("activationExecuted") == "true"
-        or flags.get("generationExecuted") == "true"
-    )
+    # generationExecuted can be true on a failed run, so only this flag means success.
+    outcome = Outcome(executed=flags.get("activationExecuted") == "true")
+
     for attributes, inner in _MESSAGE.findall(xml):
-        kind = _TYPE.search(attributes)
-        short = _SHORT_TEXT.search(inner)
-        text = _MARKUP.sub("", short.group(1) if short else inner).strip()
+        fields = {
+            name.split(":")[-1]: value for name, value in _ATTR.findall(attributes)
+        }
+        severity = fields.get("type", "").upper()[:1]
+        if severity not in ("E", "A", "X", "W"):
+            continue
+        short = _SHORT_TEXT.search(inner or "")
+        text = _MARKUP.sub("", short.group(1) if short else (inner or "")).strip()
         if not text:
             continue
-        severity = (kind.group(1) if kind else "").upper()[:1]
-        if severity in ("E", "A", "X"):
-            outcome.errors.append(text)
-        elif severity == "W":
-            outcome.warnings.append(text)
+        where = fields.get("objDescr", "").strip()
+        line = fields.get("line", "").strip()
+        if where and line and line not in ("0", "1"):
+            text = f"{where} line {line}: {text}"
+        elif where:
+            text = f"{where}: {text}"
+        (outcome.warnings if severity == "W" else outcome.errors).append(text)
     return outcome
 
 
