@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Annotated, Optional
@@ -25,7 +27,7 @@ from adt_cli.session import AdtError, AdtSession
 from adt_cli.workspace import Workspace
 
 app = typer.Typer(
-    name="adt",
+    name="abap",
     help="Fast ABAP development from the command line, straight onto the SAP ADT API.",
     no_args_is_help=True,
     add_completion=False,
@@ -35,6 +37,18 @@ err_console = Console(stderr=True)
 
 SystemOpt = Annotated[str, typer.Option("--system", "-s", help="Named system from config.")]
 PackageArg = Annotated[str, typer.Argument(help="ABAP package, e.g. ZEXAMPLE_API")]
+TraceOpt = Annotated[
+    bool,
+    typer.Option("--trace", help="Log ADT requests and responses to stderr; secrets are redacted."),
+]
+
+_trace_enabled = False
+
+
+def _set_trace(enabled: bool) -> None:
+    """Accepted either side of the subcommand: 'abap --trace push' and 'abap push --trace'."""
+    global _trace_enabled
+    _trace_enabled = _trace_enabled or enabled
 
 
 def _fail(message: str) -> None:
@@ -64,6 +78,7 @@ def _session(system: System, password: str, concurrency: int = 16) -> AdtSession
         client=system.client,
         verify_tls=system.verify_tls,
         concurrency=concurrency,
+        trace=_trace_enabled,
     )
 
 
@@ -102,7 +117,32 @@ async def _remote_drift(
     return drifted, unreadable
 
 
+def _add_to_vscode(root: Path) -> None:
+    """Add a pulled workspace folder to the active VS Code workspace."""
+    code = shutil.which("code")
+    if not code:
+        console.print("[yellow]note[/] VS Code 'code' command not found; folder was not added")
+        return
+    try:
+        subprocess.run(
+            [code, "--add", str(root)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        console.print(f"[yellow]note[/] could not add folder to VS Code: {detail}")
+
+
 # --------------------------------------------------------------------------- commands
+
+
+@app.callback()
+def main(trace: TraceOpt = False) -> None:
+    """Configure command-wide options."""
+    _set_trace(trace)
 
 
 @app.command()
@@ -117,10 +157,10 @@ def init(
     host: Annotated[str, typer.Option(prompt="Host URL (https://host:port)")],
     user: Annotated[str, typer.Option(prompt="SAP user")],
     client: Annotated[str, typer.Option(prompt="SAP client")],
-    description: Annotated[str, typer.Option(help="Free text, shown by 'adt systems'.")] = "",
+    description: Annotated[str, typer.Option(help="Free text, shown by 'abap systems'.")] = "",
     insecure: Annotated[bool, typer.Option(help="Skip TLS verification.")] = False,
 ) -> None:
-    """Add a system to ~/.adt/config.json."""
+    """Add a system to ~/.abap-adt/config.json."""
     system = System(
         name=name,
         host=host.rstrip("/"),
@@ -131,7 +171,7 @@ def init(
     )
     config.save_system(system, make_default=True)
     console.print(f"saved [bold]{name}[/] to {config.CONFIG_HOME}")
-    console.print(f"next: [bold]adt login --system {name}[/]")
+    console.print(f"next: [bold]abap login --system {name}[/]")
 
 
 @app.command()
@@ -139,7 +179,7 @@ def systems() -> None:
     """List configured systems."""
     entries = config.list_systems()
     if not entries:
-        console.print("no systems configured, run [bold]adt init[/]")
+        console.print("no systems configured, run [bold]abap init[/]")
         return
     default = config.default_system()
     table = Table(box=None, pad_edge=False)
@@ -188,8 +228,9 @@ def logout(system: SystemOpt = "") -> None:
 
 
 @app.command()
-def ping(system: SystemOpt = "") -> None:
+def ping(system: SystemOpt = "", trace: TraceOpt = False) -> None:
     """Check that the ADT endpoint is reachable."""
+    _set_trace(trace)
     target, password = _connect(system)
 
     async def run() -> str:
@@ -217,14 +258,16 @@ def pull(
     ] = None,
     jobs: Annotated[int, typer.Option("--jobs", "-j", help="Parallel requests.")] = 16,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite local changes.")] = False,
+    trace: TraceOpt = False,
 ) -> None:
     """Download a package into a local folder, in parallel."""
+    _set_trace(trace)
     root = _resolve_root(dest, package)
     previous = Workspace.load(root)
 
     if not package:
         if not previous.exists:
-            _fail(f"no package given and no manifest in {root} - try 'adt pull <PACKAGE>'")
+            _fail(f"no package given and no manifest in {root} - try 'abap pull <PACKAGE>'")
         package = previous.package
 
     if previous.exists and not force:
@@ -291,6 +334,8 @@ def pull(
         f"- {len(written)} objects, {total:,} bytes in {elapsed:.1f}s"
     )
     console.print(f"[dim]{root}[/]")
+    if dest:
+        _add_to_vscode(root)
     if failed:
         console.print(f"[dim]{len(failed)} object(s) failed to pull[/]")
 
@@ -303,12 +348,14 @@ def status(
     remote: Annotated[
         bool, typer.Option("--remote", "-r", help="Also check what changed on the server.")
     ] = False,
+    trace: TraceOpt = False,
 ) -> None:
     """Show locally modified objects. Offline unless --remote is given."""
+    _set_trace(trace)
     root = _resolve_root(dest, package)
     space = Workspace.load(root)
     if not space.exists:
-        _fail(f"no manifest in {root}, run 'adt pull' first")
+        _fail(f"no manifest in {root}, run 'abap pull' first")
 
     modified, deleted = space.scan()
     console.print(f"[bold]{space.package}[/] from {space.system}, pulled {space.pulled_at}")
@@ -357,19 +404,36 @@ def status(
 @app.command()
 def push(
     package: PackageArg = "",
-    system: SystemOpt = "",
+    system: Annotated[
+        str,
+        typer.Option(
+            "--system",
+            "-s",
+            help="Must match the system the workspace was pulled from.",
+        ),
+    ] = "",
     dest: Optional[Path] = typer.Option(None, "--dest", "-d", help="Local folder."),
     transport: Annotated[str, typer.Option(help="Transport request.")] = "",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be sent.")] = False,
     force: Annotated[
         bool, typer.Option("--force", "-f", help="Push even if the object changed on the server.")
     ] = False,
+    trace: TraceOpt = False,
 ) -> None:
     """Upload locally modified objects. They stay inactive until activated."""
+    _set_trace(trace)
     root = _resolve_root(dest, package)
     space = Workspace.load(root)
     if not space.exists:
-        _fail(f"no manifest in {root}, run 'adt pull' first")
+        _fail(f"no manifest in {root}, run 'abap pull' first")
+
+    # The baseline hashes and object URIs in the manifest only describe the system
+    # the files came from, so pushing them anywhere else is never a safe diff.
+    if system and system != space.system:
+        _fail(
+            f"workspace was pulled from {space.system}, refusing to push to {system} - "
+            f"pull the package from {system} into its own folder if that is the real target"
+        )
 
     modified, deleted = space.scan()
     if deleted:
@@ -398,7 +462,7 @@ def push(
         console.print(f"\n[dim]{len(modified)} object(s) would be pushed  [DRY RUN][/]")
         return
 
-    target, password = _connect(system or space.system)
+    target, password = _connect(space.system)
 
     async def run() -> None:
         async with _session(target, password) as adt:

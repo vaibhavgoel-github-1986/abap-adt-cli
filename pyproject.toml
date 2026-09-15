@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-adt = "adt_cli.cli:app"
+abap = "adt_cli.cli:app"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]

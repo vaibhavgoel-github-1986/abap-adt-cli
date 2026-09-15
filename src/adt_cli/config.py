@@ -115,6 +115,12 @@ def resolve(
     systems = list_systems()
     chosen = name or os.environ.get("ADT_SYSTEM", "") or default_system()
 
+    # Folded in before the guard below so a fully specified environment works
+    # with no config file at all, which is the CI case.
+    host = host or os.environ.get("ADT_HOST", "")
+    user = user or os.environ.get("ADT_USER", "")
+    client = client or os.environ.get("ADT_CLIENT", "")
+
     if not chosen and not (host and user and client):
         if systems:
             raise ConfigError(
@@ -122,7 +128,7 @@ def resolve(
                 + ", ".join(sorted(systems))
             )
         raise ConfigError(
-            f"no systems configured. Run 'adt init' or create {CONFIG_HOME}."
+            f"no systems configured. Run 'abap init' or create {CONFIG_HOME}."
         )
 
     profile = systems.get(chosen, {})
@@ -131,9 +137,9 @@ def resolve(
             f"unknown system '{chosen}', available: {', '.join(sorted(systems))}"
         )
 
-    resolved_host = host or os.environ.get("ADT_HOST", "") or str(profile.get("host", ""))
-    resolved_user = user or os.environ.get("ADT_USER", "") or str(profile.get("user", ""))
-    resolved_client = client or os.environ.get("ADT_CLIENT", "") or str(profile.get("client", ""))
+    resolved_host = host or str(profile.get("host", ""))
+    resolved_user = user or str(profile.get("user", ""))
+    resolved_client = client or str(profile.get("client", ""))
 
     missing = [
         label

@@ -13,6 +13,7 @@ Two modes matter and they must not be confused:
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
@@ -21,6 +22,7 @@ import httpx
 
 ADT_ROOT = "/sap/bc/adt"
 DISCOVERY = f"{ADT_ROOT}/discovery"
+REDACTED_HEADERS = frozenset({"authorization", "cookie", "set-cookie", "x-csrf-token"})
 
 
 class AdtError(RuntimeError):
@@ -65,6 +67,7 @@ class AdtSession:
         verify_tls: bool = True,
         concurrency: int = 16,
         timeout: float = 120.0,
+        trace: bool = False,
     ) -> None:
         self._client = httpx.AsyncClient(
             base_url=host.rstrip("/"),
@@ -81,6 +84,7 @@ class AdtSession:
         self._stateful = False
         self._gate = asyncio.Semaphore(concurrency)
         self._write_lock = asyncio.Lock()
+        self._trace = trace
         self.user = user
         self.client_number = client
 
@@ -94,7 +98,10 @@ class AdtSession:
         await self.close()
 
     async def connect(self) -> None:
-        reply = await self._client.get(DISCOVERY, headers={"x-csrf-token": "fetch"})
+        request = self._client.build_request(
+            "GET", DISCOVERY, headers={"x-csrf-token": "fetch"}
+        )
+        reply = await self._send(request)
         if reply.status_code == 401:
             raise AdtError("authentication failed", 401)
         if reply.status_code >= 400:
@@ -119,6 +126,46 @@ class AdtSession:
             headers["Content-Type"] = content_type
         return headers
 
+    async def _send(self, request: httpx.Request) -> httpx.Response:
+        self._trace_request(request)
+        reply = await self._client.send(request)
+        self._trace_response(reply)
+        return reply
+
+    def _trace_request(self, request: httpx.Request) -> None:
+        if not self._trace:
+            return
+        self._trace_message("ADT REQUEST", request.method, str(request.url), request.headers, request.content)
+
+    def _trace_response(self, reply: httpx.Response) -> None:
+        if not self._trace:
+            return
+        self._trace_message(
+            "ADT RESPONSE",
+            str(reply.status_code),
+            str(reply.url),
+            reply.headers,
+            reply.content,
+        )
+
+    @staticmethod
+    def _trace_message(
+        label: str,
+        method_or_status: str,
+        url: str,
+        headers: httpx.Headers,
+        content: bytes,
+    ) -> None:
+        visible_headers = "\n".join(
+            f"{name}: {'<redacted>' if name.lower() in REDACTED_HEADERS else value}"
+            for name, value in headers.items()
+        )
+        body = content.decode("utf-8", errors="replace")
+        print(
+            f"\n--- {label} ---\n{method_or_status} {url}\n{visible_headers}\n\n{body}\n--- END {label} ---",
+            file=sys.stderr,
+        )
+
     async def request(
         self,
         method: str,
@@ -131,26 +178,28 @@ class AdtSession:
         allow: tuple[int, ...] = (200, 201, 202),
     ) -> httpx.Response:
         async with self._gate:
-            reply = await self._client.request(
+            request = self._client.build_request(
                 method,
                 uri,
                 headers=self._headers(accept, content_type),
                 content=content,
                 params=params,
             )
+            reply = await self._send(request)
         # A stale CSRF token is reported as 403; refresh once and retry.
         if reply.status_code == 403 and "csrf" in reply.headers.get(
             "x-csrf-token", ""
         ).lower():
             await self.connect()
             async with self._gate:
-                reply = await self._client.request(
+                request = self._client.build_request(
                     method,
                     uri,
                     headers=self._headers(accept, content_type),
                     content=content,
                     params=params,
                 )
+                reply = await self._send(request)
         if reply.status_code not in allow:
             raise AdtError(_explain(reply), reply.status_code, reply.text)
         return reply
@@ -170,7 +219,10 @@ class AdtSession:
         """Return to stateless, which releases every enqueue held by the session."""
         self._stateful = False
         try:
-            await self._client.get(DISCOVERY, headers=self._headers(None, None))
+            request = self._client.build_request(
+                "GET", DISCOVERY, headers=self._headers(None, None)
+            )
+            await self._send(request)
         except httpx.HTTPError:
             pass
 
