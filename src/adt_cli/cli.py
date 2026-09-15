@@ -22,7 +22,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from adt_cli import __version__, config, cts, repository, workspace
+from adt_cli import __version__, activation, config, cts, repository, workspace
 from adt_cli.config import ConfigError, System
 from adt_cli.session import AdtError, AdtSession
 from adt_cli.workspace import Workspace
@@ -570,6 +570,61 @@ def diff(
         )
 
 
+def _report_activation(outcome: activation.Outcome, count: int, system: str) -> bool:
+    for warning in outcome.warnings:
+        console.print(f"  [yellow]warning[/] {warning}")
+    for error in outcome.errors:
+        err_console.print(f"  [red]![/]  {error}")
+    if outcome.ok:
+        console.print(f"[green]activated[/] {count} object(s) on {system}")
+        return True
+    if not outcome.executed:
+        err_console.print("[red]error[/] activation did not run")
+    else:
+        err_console.print(
+            f"[red]error[/] {len(outcome.errors)} activation error(s) - "
+            "the objects stay inactive until they are fixed"
+        )
+    return False
+
+
+@app.command()
+def activate(
+    package: PackageArg = "",
+    system: SystemOpt = "",
+    dest: Optional[Path] = typer.Option(None, "--dest", "-d", help="Local folder."),
+    trace: TraceOpt = False,
+) -> None:
+    """Activate every source object in the workspace, in one run."""
+    _set_trace(trace)
+    root = _resolve_root(dest, package)
+    space = Workspace.load(root)
+    if not space.exists:
+        _fail(f"no manifest in {root}, run 'abap pull' first")
+
+    targets = [
+        space.object_for(local) for local in sorted(space.files) if space.writable(local)
+    ]
+    if not targets:
+        console.print("nothing to activate - no source objects in this workspace")
+        return
+
+    target, password = _connect(system or space.system)
+    console.print(f"activating {len(targets)} object(s) on {target.name}...")
+
+    async def run() -> activation.Outcome:
+        async with _session(target, password) as adt:
+            return await activation.activate(adt, targets)
+
+    try:
+        outcome = asyncio.run(run())
+    except AdtError as exc:
+        _fail(str(exc))
+        return
+    if not _report_activation(outcome, len(targets), target.name):
+        raise typer.Exit(1)
+
+
 @app.command()
 def push(
     package: PackageArg = "",
@@ -586,6 +641,9 @@ def push(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be sent.")] = False,
     force: Annotated[
         bool, typer.Option("--force", "-f", help="Push even if the object changed on the server.")
+    ] = False,
+    activate_after: Annotated[
+        bool, typer.Option("--activate", help="Activate the pushed objects afterwards.")
     ] = False,
     trace: TraceOpt = False,
 ) -> None:
@@ -683,7 +741,7 @@ def push(
                 )
         return holder.request
 
-    async def run() -> None:
+    async def run() -> activation.Outcome | None:
         async with _session(target, password) as adt:
             if not force:
                 drifted, unreadable = await _remote_drift(adt, space, modified)
@@ -704,6 +762,7 @@ def push(
                 else await cts.holders(adt, [space.object_for(local) for local in modified])
             )
             corrnr = settle_transport(found) if not local_package or transport else ""
+            pushed = []
             for local in modified:
                 obj = space.object_for(local)
                 text = (root / local).read_text(encoding="utf-8")
@@ -712,11 +771,19 @@ def push(
                 # pushed object look unpushed.
                 space.files[local].sha256 = workspace.sha256(text)
                 space.save()
+                pushed.append(obj)
                 console.print(f"  [green]pushed[/] {obj.name}")
+            if not activate_after:
+                return None
+            # Every object is already unlocked, so one run covers the whole batch.
+            console.print(f"\nactivating {len(pushed)} object(s)...")
+            return await activation.activate(adt, pushed)
 
     try:
-        asyncio.run(run())
+        outcome = asyncio.run(run())
     except AdtError as exc:
         _fail(str(exc))
         return
     console.print(f"\n{len(modified)} object(s) pushed")
+    if outcome is not None and not _report_activation(outcome, len(modified), target.name):
+        raise typer.Exit(1)
