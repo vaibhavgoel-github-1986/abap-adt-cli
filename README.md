@@ -508,6 +508,81 @@ error workspace was pulled from dha-110, refusing to push to qha-300 -
 Moving code between systems is what the transport route is for, not a re-pointed
 push.
 
+**The transport is checked before anything is written.** SAP locks an object in
+one *request*; tasks are just per-developer slots inside it. So before the first
+write, push asks SAP which request already holds each object.
+
+When exactly one request holds them, there is nothing to choose — SAP would
+reject any other — so push adopts it and says so:
+
+```console
+$ abap push
+  M  src/zcl_tstmp_utilities.clas.abap
+using DHAK907258 (VAIBHAGO, 'Testing') - it already holds these objects
+  recording under your task DHAK907259
+  pushed ZCL_TSTMP_UTILITIES
+
+1 object(s) pushed
+```
+
+If the request is open but you have no task in it — developer A holds the object
+under their task — SAP opens one for you, and push reports that instead:
+
+```
+using DHAK907258 (CHANDRRA, 'Feature work') - it already holds these objects
+  SAP will open a task for VAIBHAGO in it
+```
+
+`--transport` is still honoured, and still checked. Pass one that does not lead
+to the holding request and push stops before writing:
+
+```console
+$ abap push --transport DHAK900123
+  !  src/zcl_tstmp_utilities.clas.abap is locked in DHAK907258 (VAIBHAGO, 'Testing')
+error 1 object(s) already locked in DHAK907258, not DHAK900123 - SAP locks an
+      object in one request only, so re-run with --transport DHAK907258
+```
+
+The request number and any task number inside it are all accepted, since they
+all record into the same request.
+
+**When a transport really is needed**, you get the plain error — no request holds
+these objects yet, so there is nothing to infer and nothing is invented for you:
+
+```console
+$ abap push
+error package ZGET_SUBS_API_V2 is transportable - pass --transport <TR>
+      (only local $ packages can push without one)
+```
+
+Mixed pushes are handled the obvious way. If two of three objects sit in
+`DHAK907258` and the third is in no request at all, the third joins the same
+request and is called out by name rather than slipped in quietly:
+
+```console
+  +  src/zcl_new_helper.clas.abap is in no request yet, it will be added to DHAK907258
+```
+
+Objects spanning *several* requests are refused, with the request numbers listed,
+because one push cannot legally record into both. Local `$` packages skip the
+check entirely: they are never transported.
+
+**Locks are taken and released for you.** There is no separate lock step, and no
+unlock to remember. Each object is locked immediately before its write and
+unlocked immediately after, which is where the transport entry comes from. If
+somebody else is holding the object, SAP refuses the lock and push stops with the
+server's own message, having written nothing to that object:
+
+```console
+$ abap push --transport DHAK900123
+error User CHANDRRA is currently editing ZCL_TSTMP_UTILITIES
+```
+
+Locks are session-bound, so they cannot leak: the unlock runs even when the write
+fails, and the session is returned to stateless afterwards, which releases any
+enqueue SAP still holds. A push interrupted halfway leaves earlier objects
+written and re-baselined, so re-running sends only what is left.
+
 **Concurrent edits are detected.** The manifest records the hash of exactly what
 the server handed you at pull time, so re-fetching and re-hashing shows whether
 anyone touched the object since — SE80, Eclipse, or another push. Status marks

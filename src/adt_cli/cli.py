@@ -22,7 +22,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from adt_cli import __version__, config, repository, workspace
+from adt_cli import __version__, config, cts, repository, workspace
 from adt_cli.config import ConfigError, System
 from adt_cli.session import AdtError, AdtSession
 from adt_cli.workspace import Workspace
@@ -617,13 +617,9 @@ def push(
             err_console.print(f"  [red]![/]  {local} is not a writable source object")
         _fail("refusing to push non-source objects")
 
-    # Local packages ($TMP and friends) are never transported; everything else needs
-    # an explicit transport rather than letting SAP silently auto-generate one.
-    if not transport and not space.package.startswith("$"):
-        _fail(
-            f"package {space.package} is transportable - pass --transport <TR> "
-            "(only local $ packages can push without one)"
-        )
+    # Local packages ($TMP and friends) are never transported. For everything else
+    # the transport is resolved against whatever request already holds the objects.
+    local_package = space.package.startswith("$")
 
     for local in modified:
         console.print(f"  [yellow]M[/]  {local}")
@@ -632,6 +628,60 @@ def push(
         return
 
     target, password = _connect(space.system)
+
+    def settle_transport(found: list[cts.Holder | None]) -> str:
+        """Reconcile the requested transport with the request SAP already locked in."""
+        held = {
+            holder.request: holder for holder in found if holder is not None
+        }
+        if transport:
+            clashes = [
+                (local, holder)
+                for local, holder in zip(modified, found)
+                if holder is not None and not holder.accepts(transport)
+            ]
+            for local, holder in clashes:
+                err_console.print(
+                    f"  [red]![/]  {local} is locked in {holder.describe()}"
+                )
+            if clashes:
+                names = ", ".join(sorted({holder.request for _, holder in clashes}))
+                _fail(
+                    f"{len(clashes)} object(s) already locked in {names}, not {transport} - "
+                    f"SAP locks an object in one request only, so re-run with --transport {names}"
+                )
+            return transport
+
+        if local_package:
+            return ""
+        if len(held) > 1:
+            names = ", ".join(sorted(held))
+            _fail(
+                f"package {space.package} is transportable and these objects span "
+                f"several requests ({names}) - push them separately with --transport"
+            )
+        if not held:
+            _fail(
+                f"package {space.package} is transportable - pass --transport <TR> "
+                "(only local $ packages can push without one)"
+            )
+
+        # Exactly one request already owns these objects, and SAP would reject any
+        # other, so there is nothing to choose: adopt it and say so.
+        holder = next(iter(held.values()))
+        mine = holder.task_of(target.user)
+        console.print(f"[dim]using {holder.describe()} - it already holds these objects[/]")
+        if mine:
+            console.print(f"[dim]  recording under your task {mine}[/]")
+        else:
+            console.print(f"[dim]  SAP will open a task for {target.user} in it[/]")
+        for local, found_holder in zip(modified, found):
+            if found_holder is None:
+                console.print(
+                    f"  [yellow]+[/]  {local} is in no request yet, "
+                    f"it will be added to {holder.request}"
+                )
+        return holder.request
 
     async def run() -> None:
         async with _session(target, password) as adt:
@@ -648,10 +698,16 @@ def push(
                         f"{len(drifted)} object(s) changed on the server - pushing would "
                         "overwrite that work. Re-pull to inspect, or use --force to overwrite."
                     )
+            found = (
+                []
+                if local_package and not transport
+                else await cts.holders(adt, [space.object_for(local) for local in modified])
+            )
+            corrnr = settle_transport(found) if not local_package or transport else ""
             for local in modified:
                 obj = space.object_for(local)
                 text = (root / local).read_text(encoding="utf-8")
-                await repository.write_source(adt, obj, text, transport=transport)
+                await repository.write_source(adt, obj, text, transport=corrnr)
                 # Re-baseline as we go: a later failure must not make an already
                 # pushed object look unpushed.
                 space.files[local].sha256 = workspace.sha256(text)
