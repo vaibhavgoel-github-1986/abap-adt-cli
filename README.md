@@ -227,7 +227,15 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 ```
 
 `pipx` keeps the CLI in its own virtualenv and puts `abap` on your `PATH`. Plain
-`pip install` works too.
+`pip install` works too. To pin a published version rather than the tip of the
+default branch, name the tag:
+
+```bash
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v0.1.0"
+```
+
+Afterwards `abap update` keeps it current — see
+[Versions and updating](#versions-and-updating).
 
 Then point it at a system and store the password once:
 
@@ -955,12 +963,15 @@ when no release has been published for it.
 
 ## Project status
 
-Early. Pull, status and push are working and verified against a real system,
-including method-level transport entries, the transport guard and conflict
-detection.
+First release: **v0.1.0**. Every command below has been exercised against a live
+S/4HANA system, not only unit-tested — pulling a 30-object package, creating and
+deleting objects, method-level transport entries, the transport guard, conflict
+detection, and a single activation run resolving a cyclic CDS dependency that
+would fail if the objects were activated one at a time.
 
-Not yet implemented: where-used, syntax check, unit test runs, transport
-creation.
+Not yet implemented: where-used, syntax check, unit test runs, and creating a
+transport request — for those, reach for ADT/Eclipse or an MCP server. See
+[Why hybrid push?](#why-hybrid-push).
 
 ## Deleting
 
