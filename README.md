@@ -329,7 +329,8 @@ abap --trace push --transport DHAK900123
 | `abap transport TR list` | what a request contains |
 | `abap transport TR add NAME...` | add objects, whole or method-level |
 | `abap transport TR remove NAME...` | remove objects from a request |
-| `abap version` | show the CLI version |
+| `abap version` | which version is installed, and how |
+| `abap update` | install the newest published release |
 
 Every command that talks to SAP also takes `--system` / `-s` and `--trace`.
 
@@ -900,6 +901,57 @@ source text, and can't be pushed back. Adding a type is one line in
 Anything still unmapped lands in `Other/` as `.txt`. A handful of generated or
 obsolete objects have no readable ADT endpoint at all; those are reported one
 per line and skipped, and the rest of the pull still completes.
+
+## Versions and updating
+
+`abap version` reports what is actually running, and how it got there:
+
+```console
+$ abap version
+abap-adt-cli 0.1.0 (pipx, /Users/you/Library/Application Support/pipx/venvs/abap-adt-cli)
+
+$ abap version --check
+abap-adt-cli 0.1.0 (pipx, ...)
+0.2.0 is available - run 'abap update'
+```
+
+The version is read from the *installed distribution*, not from the source tree,
+so a checkout sitting next to an older installed copy cannot make it lie.
+
+```bash
+abap update              # install the newest release, if it is newer
+abap update --check      # print the command it would run, change nothing
+abap update --version v0.2.0
+abap update --force      # reinstall even when nothing is newer
+```
+
+It works out how the CLI was installed and upgrades it the matching way —
+`pipx upgrade` for a pipx install, `pip install --upgrade` for a venv. A source
+checkout is refused, because `git pull` is the right answer there:
+
+```console
+$ abap update
+error this looks like a source checkout, not an installed copy -
+      update it with 'git pull' instead
+```
+
+A `--version` argument is matched against a version pattern before it reaches
+the install URL. Anything else is refused rather than interpolated.
+
+### Cutting a release
+
+There is one version number, in `src/adt_cli/__init__.py`. `pyproject.toml`
+reads it from there through `[tool.hatch.version]`, so the two cannot drift.
+
+```bash
+# bump __version__ in src/adt_cli/__init__.py, then
+git commit -am "release 0.2.0"
+git tag v0.2.0
+git push && git push --tags
+```
+
+`abap update` finds the newest GitHub release, and falls back to the newest tag
+when no release has been published for it.
 
 ## Project status
 

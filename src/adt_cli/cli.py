@@ -6,10 +6,12 @@ This module only wires commands onto the Typer app; the work lives in
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
 
-from adt_cli import __version__, runtime, ui
-from adt_cli.commands import objects_cmd, profiles, review
+from adt_cli import __version__, release, runtime, ui
+from adt_cli.commands import objects_cmd, profiles, release_cmd, review
 from adt_cli.commands import pull as pull_cmd
 from adt_cli.commands import push as push_cmd
 from adt_cli.commands.options import TraceOpt
@@ -29,9 +31,23 @@ def main(trace: TraceOpt = False) -> None:
 
 
 @app.command()
-def version() -> None:
+def version(
+    check: Annotated[
+        bool, typer.Option("--check", help="Also ask GitHub whether a newer release exists.")
+    ] = False,
+) -> None:
     """Show the CLI version."""
-    ui.console.print(f"abap-adt-cli {__version__}")
+    install = release.current()
+    ui.console.print(install.describe())
+    if not check:
+        return
+    newest = release.latest()
+    if newest is None:
+        ui.console.print("[dim]no releases published yet[/]")
+    elif release.is_newer(newest, install.version):
+        ui.console.print(f"[yellow]{newest} is available[/] - run 'abap update'")
+    else:
+        ui.console.print("[green]up to date[/]")
 
 
 app.command()(profiles.init)
@@ -45,3 +61,4 @@ app.command()(review.diff)
 app.command()(push_cmd.push)
 app.command()(objects_cmd.delete)
 app.command()(objects_cmd.transport)
+app.command()(release_cmd.update)

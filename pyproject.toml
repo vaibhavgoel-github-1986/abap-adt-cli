@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "abap-adt-cli"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Fast, parallel ABAP development from the command line, built directly on the SAP ADT REST API."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,9 @@ abap = "adt_cli.cli:app"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+
+[tool.hatch.version]
+path = "src/adt_cli/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/adt_cli"]
