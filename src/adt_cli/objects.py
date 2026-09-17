@@ -11,6 +11,7 @@ pulled as source. Adding one is a single line.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import quote
 
 SOURCE_MAIN = "/source/main"
 
@@ -97,3 +98,56 @@ def source_uri(object_uri: str, kind: ObjectType) -> str:
     if object_uri.endswith(SOURCE_MAIN):
         return object_uri
     return f"{object_uri}{kind.source_path}"
+
+
+# --- abapGit file -> ADT source endpoint -------------------------------------
+#
+# Pull writes abapGit's whole file set; push sends back only the members ADT can
+# write, which is where the fine-grained transport entries come from. A class is
+# five separate files here, each with its own ADT endpoint. Anything missing from
+# this table has no ADT source endpoint at all.
+
+
+@dataclass(frozen=True)
+class AdtTarget:
+    suffix: str
+    type_code: str
+    collection: str
+    source_path: str = SOURCE_MAIN
+
+
+_ADT_TARGETS: tuple[AdtTarget, ...] = (
+    # Longest suffixes first so 'zcl_x.clas.abap' cannot shadow the includes.
+    AdtTarget(
+        ".clas.locals_def.abap", "CLAS/OC", "/sap/bc/adt/oo/classes", "/includes/definitions"
+    ),
+    AdtTarget(
+        ".clas.locals_imp.abap", "CLAS/OC", "/sap/bc/adt/oo/classes", "/includes/implementations"
+    ),
+    AdtTarget(".clas.macros.abap", "CLAS/OC", "/sap/bc/adt/oo/classes", "/includes/macros"),
+    AdtTarget(
+        ".clas.testclasses.abap", "CLAS/OC", "/sap/bc/adt/oo/classes", "/includes/testclasses"
+    ),
+    AdtTarget(".clas.abap", "CLAS/OC", "/sap/bc/adt/oo/classes"),
+    AdtTarget(".intf.abap", "INTF/OI", "/sap/bc/adt/oo/interfaces"),
+    AdtTarget(".prog.abap", "PROG/P", "/sap/bc/adt/programs/programs"),
+    AdtTarget(".ddls.asddls", "DDLS/DF", "/sap/bc/adt/ddic/ddl/sources"),
+    AdtTarget(".ddlx.asddlxs", "DDLX/EX", "/sap/bc/adt/ddic/ddlx/sources"),
+    AdtTarget(".dcls.asdcls", "DCLS/DL", "/sap/bc/adt/acm/dcl/sources"),
+    AdtTarget(".bdef.asbdef", "BDEF/BDO", "/sap/bc/adt/bo/behaviordefinitions"),
+    AdtTarget(".srvd.srvdsrv", "SRVD/SRV", "/sap/bc/adt/ddic/srvd/sources"),
+)
+
+
+def adt_target(path: str) -> AdtTarget | None:
+    """The ADT endpoint that can write an abapGit file, or None when there is none."""
+    filename = path.rsplit("/", 1)[-1].lower()
+    for target in _ADT_TARGETS:
+        if filename.endswith(target.suffix):
+            return target
+    return None
+
+
+def adt_object_uri(target: AdtTarget, name: str) -> str:
+    # Namespaced names carry '/', which has to survive as a path segment.
+    return f"{target.collection}/{quote(name.lower(), safe='')}"

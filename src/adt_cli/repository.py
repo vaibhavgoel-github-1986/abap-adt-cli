@@ -162,13 +162,31 @@ async def write_source(
     """
     if not obj.kind.writable:
         raise AdtError(f"{obj.name} is a {obj.type_code} object and has no writable source")
-    async with session.locked(obj.uri) as lock:
+    await write_source_at(
+        session, obj.uri, objects.source_uri(obj.uri, obj.kind), text, transport=transport
+    )
+
+
+async def write_source_at(
+    session: AdtSession,
+    object_uri: str,
+    source_uri: str,
+    text: str,
+    *,
+    transport: str = "",
+) -> None:
+    """Write one source endpoint of an object, which may be an include of it.
+
+    The lock is taken on the object, but the write targets a single include, so
+    SAP records the change as one LIMU entry rather than the whole class.
+    """
+    async with session.locked(object_uri) as lock:
         params = {"lockHandle": lock.handle}
         if transport:
             params["corrNr"] = transport
         await session.request(
             "PUT",
-            objects.source_uri(obj.uri, obj.kind),
+            source_uri,
             content=text.encode("utf-8"),
             content_type="text/plain; charset=utf-8",
             params=params,

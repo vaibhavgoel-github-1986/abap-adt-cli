@@ -1,12 +1,30 @@
-"""Push: upload locally modified objects, optionally activating them."""
+"""Push: send edited files back through ADT.
+
+Pull brings down abapGit's whole file set, but only some of those files have an
+ADT source endpoint. Those are written individually, so SAP records a one-method
+edit as a single LIMU entry instead of locking the whole class. Files without an
+endpoint - metadata XML, SEGW projects, SICF nodes - are reported and skipped.
+"""
 
 from __future__ import annotations
 
+from collections import defaultdict
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from adt_cli import activation, creation, cts, objects, repository, runtime, ui, workspace
+from adt_cli import (
+    activation,
+    creation,
+    cts,
+    layout,
+    objects,
+    repository,
+    runtime,
+    ui,
+    workspace,
+)
 from adt_cli.commands.options import DestOpt, PackageArg, TraceOpt
 from adt_cli.errors import EXIT_ERROR, AbapCliError, ConflictError
 from adt_cli.workspace import Workspace
@@ -28,6 +46,9 @@ def push(
     activate_after: Annotated[
         bool, typer.Option("--activate", help="Activate the pushed objects afterwards.")
     ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip the prompt about unsupported files.")
+    ] = False,
     trace: TraceOpt = False,
 ) -> None:
     """Upload locally modified objects. They stay inactive until activated."""
@@ -36,97 +57,189 @@ def push(
     root = runtime.resolve_root(dest, package)
     space = runtime.load_workspace(root)
 
-    # The baseline hashes and object URIs in the manifest only describe the system
-    # the files came from, so pushing them anywhere else is never a safe diff.
+    # The baseline hashes in the manifest only describe the system the files came
+    # from, so pushing them anywhere else is never a safe diff.
     if system and system != space.system:
         raise ConflictError(
             f"workspace was pulled from {space.system}, refusing to push to {system} - "
             f"pull the package from {system} into its own folder if that is the real target"
         )
 
-    modified = _plan_files(space, dry_run)
-    if modified is None:
-        return
-    fresh = space.untracked()
-
-    target, password = runtime.connect(space.system)
-    # Local packages ($TMP and friends) are never transported.
-    local_package = space.package.startswith("$")
-
-    async def body() -> activation.Outcome | None:
-        async with runtime.session(target, password) as adt:
-            if not force:
-                await _refuse_on_drift(adt, space, modified, target.name)
-            corrnr = ""
-            if not local_package or requested:
-                holders = await cts.holders(
-                    adt, [space.object_for(local) for local in modified]
-                )
-                plan = cts.reconcile(
-                    modified,
-                    holders,
-                    requested=requested,
-                    package=space.package,
-                    user=target.user,
-                )
-                for line in plan.notes:
-                    ui.console.print(f"[dim]{line}[/]")
-                corrnr = plan.request
-
-            pushed = await _create(adt, space, fresh, corrnr)
-            pushed += await _upload(adt, space, modified, corrnr)
-            if not activate_after:
-                return None
-            # Every object is already unlocked, so one run covers the whole batch.
-            ui.console.print(f"\nactivating {len(pushed)} object(s)...")
-            return await activation.activate(adt, pushed)
-
-    outcome = runtime.run(body)
-    ui.console.print(f"\n{len(modified) + len(fresh)} object(s) pushed")
-    if outcome is not None and not _report_activation(
-        outcome, len(modified) + len(fresh), target.name
-    ):
-        raise typer.Exit(EXIT_ERROR)
-
-
-def _plan_files(space: Workspace, dry_run: bool) -> list[str] | None:
-    """The objects push would send, or None when there is nothing left to do."""
     modified, deleted = space.scan()
     fresh = space.untracked()
     if deleted:
         ui.note(f"{len(deleted)} deleted file(s) are ignored by push")
     if not modified and not fresh:
         ui.console.print("nothing to push - no local changes")
-        return None
+        return
 
-    blocked = [local for local in modified if not space.writable(local)]
-    unsupported = [
-        local for local in fresh if not creation.supported(objects.type_for_file(local).code)
-    ]
-    if blocked:
-        for local in blocked:
-            ui.problem(f"{local} is not a writable source object")
-        raise AbapCliError("refusing to push non-source objects")
-    if unsupported:
-        for local in unsupported:
-            ui.problem(f"{local} is a new object of a type this CLI cannot create yet")
-        raise AbapCliError("create these in Eclipse/ADT first, then re-pull")
+    changed = sorted(set(modified) | set(fresh))
+    supported = [local for local in changed if objects.adt_target(local)]
+    unsupported = [local for local in changed if not objects.adt_target(local)]
 
-    for local in fresh:
-        ui.console.print(f"  {ui.MARKER_NEW}  {local}  [dim](new)[/]")
-    for local in modified:
-        ui.console.print(f"  {ui.MARKER_MINE}  {local}")
+    for local in changed:
+        marker = ui.MARKER_NEW if local in fresh else ui.MARKER_MINE
+        note = "  [dim](new)[/]" if local in fresh else ""
+        if local in unsupported:
+            note += "  [yellow](no ADT endpoint, will be skipped)[/]"
+        ui.console.print(f"  {marker}  {local}{note}")
+
+    if unsupported and not _confirm(unsupported, supported, yes, dry_run):
+        raise AbapCliError("nothing pushed")
+
     if dry_run:
-        count = len(modified) + len(fresh)
-        ui.console.print(f"\n[dim]{count} object(s) would be pushed  [DRY RUN][/]")
-        return None
-    return modified
+        ui.console.print(f"\n[dim]{len(supported)} file(s) would be pushed  [DRY RUN][/]")
+        return
+
+    target, password = runtime.connect(space.system)
+    plan = [_Item(local, space) for local in supported]
+
+    async def body() -> activation.Outcome | None:
+        async with runtime.zsync(target, password) as sap:
+            if not force:
+                await _refuse_on_drift(sap, space, modified, target.name)
+
+        async with runtime.session(target, password) as adt:
+            corrnr = await _transport_for(adt, space, plan, requested, target.user)
+            for item in plan:
+                if item.local in fresh:
+                    await _create(adt, space, item, corrnr)
+                await repository.write_source_at(
+                    adt, item.object_uri, item.source_uri, space.read(item.local), transport=corrnr
+                )
+                ui.console.print(f"  [green]pushed[/] {item.label}")
+            if not activate_after:
+                return None
+            touched = _distinct_objects(plan)
+            ui.console.print(f"\nactivating {len(touched)} object(s)...")
+            return await activation.activate(adt, touched)
+
+    outcome = runtime.run(body)
+
+    for item in plan:
+        entry = space.files.get(item.local)
+        if entry is not None:
+            entry.sha256 = workspace.sha256(space.read_bytes(item.local))
+    space.save()
+
+    ui.console.print(f"\n{len(plan)} file(s) pushed")
+    if outcome is not None and not _report_activation(outcome, len(plan), target.name):
+        raise typer.Exit(EXIT_ERROR)
 
 
-async def _refuse_on_drift(adt, space: Workspace, modified: list[str], system: str) -> None:
-    drifted, unreadable = await runtime.remote_drift(adt, space, modified)
-    for local in unreadable:
-        ui.problem(f"{local} could not be read back")
+class _Item:
+    """One file to push, with the ADT endpoint that accepts it."""
+
+    def __init__(self, local: str, space: Workspace) -> None:
+        target = objects.adt_target(local)
+        if target is None:
+            raise AbapCliError(f"{local} has no ADT source endpoint")
+        name, _ = _identity(local)
+        self.local = local
+        self.name = name
+        self.type_code = target.type_code
+        self.package = space.package_of(local)
+        self.object_uri = objects.adt_object_uri(target, name)
+        self.source_uri = f"{self.object_uri}{target.source_path}"
+
+    @property
+    def label(self) -> str:
+        member = Path(self.local).name.split(".", 2)[-1]
+        return f"{self.type_code.split('/')[0]} {self.name}  [dim]{member}[/]"
+
+    def as_object(self) -> repository.RepoObject:
+        return repository.RepoObject(
+            name=self.name, type_code=self.type_code, uri=self.object_uri
+        )
+
+
+def _identity(local: str) -> tuple[str, str]:
+    name, obj_type = layout.parse_filename(Path(local).name)
+    return name, obj_type
+
+
+def _distinct_objects(plan: list[_Item]) -> list[repository.RepoObject]:
+    """One entry per object, so a class edited in three files activates once."""
+    seen: dict[str, repository.RepoObject] = {}
+    for item in plan:
+        seen.setdefault(item.object_uri, item.as_object())
+    return list(seen.values())
+
+
+def _confirm(unsupported: list[str], supported: list[str], yes: bool, dry_run: bool) -> bool:
+    by_type: dict[str, list[str]] = defaultdict(list)
+    for local in unsupported:
+        _, obj_type = _identity(local)
+        by_type[obj_type or "?"].append(local)
+
+    ui.console.print(
+        f"\n[yellow]{len(unsupported)} changed file(s) have no ADT endpoint "
+        "and cannot be pushed yet:[/]"
+    )
+    for obj_type, locals_ in sorted(by_type.items()):
+        ui.console.print(f"  [bold]{obj_type}[/]  {len(locals_)} file(s)")
+        for local in locals_[:5]:
+            ui.console.print(f"     [dim]{local}[/]")
+        if len(locals_) > 5:
+            ui.console.print(f"     [dim]... and {len(locals_) - 5} more[/]")
+
+    if not supported:
+        ui.console.print("\n[red]none of the changed files can be pushed through ADT[/]")
+        return False
+    if yes or dry_run:
+        return True
+    return typer.confirm(
+        f"\nPush the {len(supported)} supported file(s) and skip the rest?", default=False
+    )
+
+
+async def _transport_for(
+    adt, space: Workspace, plan: list[_Item], requested: str, user: str
+) -> str:
+    # Local packages ($TMP and friends) are never transported.
+    if space.package.startswith("$") and not requested:
+        return ""
+    holders = await cts.holders(adt, _distinct_objects(plan))
+    decided = cts.reconcile(
+        [item.local for item in plan],
+        holders,
+        requested=requested,
+        package=space.package,
+        user=user,
+    )
+    for line in decided.notes:
+        ui.console.print(f"[dim]{line}[/]")
+    return decided.request
+
+
+async def _create(adt, space: Workspace, item: _Item, transport: str) -> None:
+    if not creation.supported(item.type_code):
+        raise AbapCliError(
+            f"{item.local} is a new {item.type_code} object and this CLI cannot create it yet - "
+            "create it in Eclipse/ADT first, then re-pull"
+        )
+    text = space.read(item.local)
+    await creation.create(
+        adt,
+        item.type_code,
+        item.name,
+        item.package,
+        creation.describe(text, item.name),
+        transport=transport,
+    )
+    ui.console.print(f"  [green]created[/] {item.name} in {item.package}")
+
+
+async def _refuse_on_drift(sap, space: Workspace, modified: list[str], system: str) -> None:
+    """Drift is checked against a fresh abapGit export, not ADT.
+
+    The manifest baseline was written by the abapGit serialiser, so only another
+    export is a like-for-like comparison.
+    """
+    remote = await runtime.remote_archive(sap, space)
+    drifted, vanished = runtime.archive_drift(space, remote, modified)
+    for local in vanished:
+        ui.problem(f"{local} no longer exists on {system}")
     if not drifted:
         return
     for local in drifted:
@@ -134,54 +247,9 @@ async def _refuse_on_drift(adt, space: Workspace, modified: list[str], system: s
             f"  {ui.MARKER_BOTH}  {local} also changed on {system} since your pull"
         )
     raise ConflictError(
-        f"{len(drifted)} object(s) changed on the server - pushing would overwrite that "
+        f"{len(drifted)} file(s) changed on the server - pushing would overwrite that "
         "work. Re-pull to inspect, or use --force to overwrite."
     )
-
-
-async def _create(
-    adt, space: Workspace, fresh: list[str], transport: str
-) -> list[repository.RepoObject]:
-    """New files have no ADT URI yet, so the object is created before its source."""
-    created = []
-    for local in fresh:
-        kind = objects.type_for_file(local)
-        name = objects.name_for_file(local, kind)
-        text = space.read(local)
-        uri = await creation.create(
-            adt,
-            kind.code,
-            name,
-            space.package,
-            creation.describe(text, name),
-            transport=transport,
-        )
-        obj = repository.RepoObject(name=name, type_code=kind.code, uri=uri)
-        await repository.write_source(adt, obj, text, transport=transport)
-        space.files[local] = workspace.Entry(
-            name=name, type_code=kind.code, uri=uri, sha256=workspace.sha256(text)
-        )
-        space.save()
-        created.append(obj)
-        ui.console.print(f"  [green]created[/] {name}")
-    return created
-
-
-async def _upload(
-    adt, space: Workspace, modified: list[str], transport: str
-) -> list[repository.RepoObject]:
-    pushed = []
-    for local in modified:
-        obj = space.object_for(local)
-        text = space.read(local)
-        await repository.write_source(adt, obj, text, transport=transport)
-        # Re-baseline as we go: a later failure must not make an already pushed
-        # object look unpushed.
-        space.files[local].sha256 = workspace.sha256(text)
-        space.save()
-        pushed.append(obj)
-        ui.console.print(f"  [green]pushed[/] {obj.name}")
-    return pushed
 
 
 def _report_activation(outcome: activation.Outcome, count: int, system: str) -> bool:
@@ -190,7 +258,7 @@ def _report_activation(outcome: activation.Outcome, count: int, system: str) -> 
     for error in outcome.errors:
         ui.problem(error)
     if outcome.ok:
-        ui.console.print(f"[green]activated[/] {count} object(s) on {system}")
+        ui.console.print(f"[green]activated[/] {count} file(s) on {system}")
         return True
     if not outcome.executed:
         ui.err_console.print("[red]error[/] activation did not run")

@@ -10,7 +10,8 @@ from adt_cli.workspace import Workspace, sha256
 
 
 def _space(tmp_path) -> Workspace:
-    return Workspace(root=tmp_path, package="ZTEST", system="dev-100")
+    # Flat layout keeps these assertions about scanning, not about folder shape.
+    return Workspace(root=tmp_path, package="ZTEST", system="dev-100", se80=False)
 
 
 def test_write_then_scan_is_clean(tmp_path):
@@ -73,13 +74,24 @@ def test_object_name_cannot_escape_the_workspace():
     assert ".." not in obj.filename
 
 
-def test_non_utf8_file_is_reported(tmp_path):
+def test_binary_file_is_scanned_not_rejected(tmp_path):
+    """abapGit exports MIME objects as binary, so scanning hashes bytes."""
+    space = _space(tmp_path)
+    space.write(RepoObject("ZCL_A", "CLAS/OC", "/uri"), "x")
+    (tmp_path / "src" / "zcl_a.clas.abap").write_bytes(b"\xff\xfe binary")
+
+    modified, deleted = space.scan()
+    assert modified == ["src/zcl_a.clas.abap"]
+    assert not deleted
+
+
+def test_non_utf8_file_is_reported_on_text_read(tmp_path):
     space = _space(tmp_path)
     space.write(RepoObject("ZCL_A", "CLAS/OC", "/uri"), "x")
     (tmp_path / "src" / "zcl_a.clas.abap").write_bytes(b"\xff\xfe binary")
 
     with pytest.raises(WorkspaceError, match="UTF-8"):
-        space.scan()
+        space.read("src/zcl_a.clas.abap")
 
 
 def test_untracked_object_is_reported(tmp_path):

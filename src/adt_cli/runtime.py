@@ -22,6 +22,8 @@ from adt_cli.config import System
 from adt_cli.errors import EXIT_INTERRUPTED, AbapCliError, WorkspaceError
 from adt_cli.session import AdtSession
 from adt_cli.workspace import Workspace
+from adt_cli.zsync import ZsyncSession
+from adt_cli.zsync import unpack as zsync_unpack
 
 T = TypeVar("T")
 
@@ -84,6 +86,16 @@ def session(system: System, password: str, concurrency: int = 16) -> AdtSession:
     )
 
 
+def zsync(system: System, password: str) -> ZsyncSession:
+    return ZsyncSession(
+        host=system.host,
+        user=system.user,
+        password=password,
+        client=system.client,
+        verify_tls=system.verify_tls,
+    )
+
+
 def resolve_root(dest: Path | None, package: str) -> Path:
     """Running inside a pulled workspace uses that folder, never a nested copy."""
     if dest:
@@ -124,6 +136,34 @@ async def remote_drift(
         elif workspace.sha256(result.text) != space.files[local].sha256:
             drifted.append(local)
     return drifted, unreadable
+
+
+async def remote_archive(sap: ZsyncSession, space: Workspace) -> dict[str, bytes]:
+    """Fresh server copy of the package, keyed by canonical archive path."""
+    blob = await sap.export(space.package, include_subpackages=space.subpackages)
+    return dict(zsync_unpack(blob))
+
+
+def archive_drift(
+    space: Workspace, remote: dict[str, bytes], locals_: list[str]
+) -> tuple[list[str], list[str]]:
+    """Locals whose server copy no longer matches the pulled baseline.
+
+    The manifest hash is what the server handed us at pull time, so a mismatch
+    means somebody else (SE80, Eclipse, another push) changed the object since.
+    Returns (drifted, vanished).
+    """
+    drifted, vanished = [], []
+    for local in locals_:
+        entry = space.files.get(local)
+        if entry is None:
+            continue
+        current = remote.get(space.canonical_for(local))
+        if current is None:
+            vanished.append(local)
+        elif workspace.sha256(current) != entry.sha256:
+            drifted.append(local)
+    return drifted, vanished
 
 
 def add_to_vscode(root: Path) -> None:

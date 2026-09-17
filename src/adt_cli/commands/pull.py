@@ -1,4 +1,10 @@
-"""Pull: download a package into a local workspace."""
+"""Pull: download a package into a local workspace.
+
+Objects come through ZSYNC in abapGit's file format, which is what makes every
+object type reachable - and what gives a class its separate local definitions,
+local implementations, macros and test class files instead of just its main
+source.
+"""
 
 from __future__ import annotations
 
@@ -6,29 +12,12 @@ import time
 from typing import Annotated
 
 import typer
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
+from rich.tree import Tree
 
-from adt_cli import repository, runtime, ui
-from adt_cli.commands.options import DestOpt, JobsOpt, PackageArg, SystemOpt, TraceOpt
+from adt_cli import layout, runtime, ui, zsync
+from adt_cli.commands.options import DestOpt, PackageArg, SystemOpt, TraceOpt
 from adt_cli.errors import AbapCliError, WorkspaceError
-from adt_cli.workspace import Workspace
-
-
-def parse_types(raw: str) -> list[str]:
-    return [part.strip().upper() for part in raw.split(",") if part.strip()]
-
-
-def wanted_type(code: str, wanted: list[str]) -> bool:
-    """Accepts both the full ADT code and its bare form: CLAS/OC and CLAS."""
-    code = code.upper()
-    return code in wanted or code.split("/", 1)[0] in wanted
+from adt_cli.workspace import MODE_ZSYNC, Workspace
 
 
 @runtime.guard
@@ -38,26 +27,18 @@ def pull(
     dest: DestOpt = None,
     se80: Annotated[
         bool | None, typer.Option("--se80/--flat", help="Lay files out as an SE80 tree.")
+    ] = None,    subpackages: Annotated[
+        bool | None,
+        typer.Option("--subpackages/--no-subpackages", help="Include sub-package objects."),
     ] = None,
-    jobs: JobsOpt = 16,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite local changes.")] = False,
-    match: Annotated[
-        str, typer.Option("--match", "-m", help="Object name pattern, e.g. 'ZCL_SUBS*'.")
-    ] = "",
-    types: Annotated[
-        str, typer.Option("--type", "-t", help="Comma-separated ADT types, e.g. 'CLAS,DDLS'.")
-    ] = "",
-    user: Annotated[
-        str,
-        typer.Option(
-            "--user",
-            "-u",
-            help="Object owner. Defaults to you for local $ packages; '*' means everyone.",
-        ),
-    ] = "",
     trace: TraceOpt = False,
 ) -> None:
-    """Download a package into a local folder, in parallel."""
+    """Download a package into a local folder.
+
+    Run inside an already-pulled folder to refresh it: the package, system and
+    layout are taken from the last pull.
+    """
     runtime.set_trace(trace)
     root = runtime.resolve_root(dest, package)
     previous = Workspace.load(root)
@@ -72,63 +53,55 @@ def pull(
     if previous.exists and not force:
         _refuse_to_discard(previous)
 
-    layout_se80 = previous.se80 if se80 is None else se80
-    # A refresh keeps whatever narrowed the original pull, so it cannot silently widen.
-    pattern = match or previous.match
-    wanted = parse_types(types) or previous.types
+    # A refresh keeps whatever shaped the original pull, so it cannot silently widen.
+    layout_se80 = previous.se80 if (se80 is None and previous.exists) else bool(se80 is not False)
+    with_subpackages = previous.subpackages if subpackages is None else subpackages
     target, password = runtime.connect(system or previous.system)
-
-    # $TMP is one package shared by every developer, so narrow it to your own
-    # objects unless asked otherwise. '*' is the explicit way back to everybody.
-    owner = user or previous.owner
-    if not owner and package.startswith("$"):
-        owner = target.user
-    owner_filter = "" if owner == "*" else owner.upper()
 
     started = time.perf_counter()
 
-    async def body() -> tuple[Workspace, list[repository.Fetched]]:
-        async with runtime.session(target, password, jobs) as adt:
-            scope = f" owned by {owner_filter}" if owner_filter else ""
-            ui.console.print(f"[dim]connected to {target.name}, listing {package}{scope}...[/]")
-            found = await repository.list_package(
-                adt, package, pattern=pattern or "*", owner=owner_filter
-            )
-            if wanted:
-                found = [obj for obj in found if wanted_type(obj.type_code, wanted)]
-            if not found:
-                raise AbapCliError(f"nothing in {package.upper()} matched")
-            space = Workspace(
-                root=root,
-                package=package.upper(),
-                system=target.name,
-                se80=layout_se80,
-                match=pattern,
-                types=wanted,
-                owner=owner,
-            )
-            results = await _fetch_with_progress(adt, found, jobs)
-            for result in results:
-                if result.ok:
-                    space.write(result.obj, result.text)
-            space.save()
-            return space, results
+    async def body() -> tuple[Workspace, list[layout.FileRef], int]:
+        async with runtime.zsync(target, password) as sap:
+            ui.console.print(f"[dim]connected to {target.name}, exporting {package.upper()}...[/]")
+            blob = await sap.export(package, include_subpackages=with_subpackages)
 
-    space, results = runtime.run(body)
+        entries = zsync.unpack(blob)
+        if not entries:
+            raise AbapCliError(f"{package.upper()} came back empty")
+
+        config = next((data for name, data in entries if name == layout.REPO_CONFIG_FILE), None)
+        logic = layout.folder_logic(config)
+
+        space = Workspace(
+            root=root,
+            package=package.upper(),
+            system=target.name,
+            se80=layout_se80,
+            mode=MODE_ZSYNC,
+            subpackages=with_subpackages,
+            folder_logic=logic,
+        )
+        refs = []
+        with ui.console.status(f"writing {len(entries)} files..."):
+            for canonical, data in entries:
+                ref = layout.to_local_path(canonical, space.package, logic)
+                space.store(ref, data)
+                refs.append(ref)
+        space.save()
+        return space, refs, len(blob)
+
+    space, refs, size = runtime.run(body)
 
     elapsed = time.perf_counter() - started
-    written = [result for result in results if result.ok]
-    failed = [result for result in results if not result.ok]
-    total = sum(len(result.text) for result in written)
+    objects = len({(ref.obj_type, ref.obj_name) for ref in refs if ref.obj_name})
     ui.console.print(
         f"pulled [bold]{space.package}[/] from [bold]{target.name}[/] "
-        f"- {len(written)} objects, {total:,} bytes in {elapsed:.1f}s"
+        f"- {objects} objects in {len(space.files)} files, {size:,} bytes in {elapsed:.1f}s"
     )
-    ui.console.print(f"[dim]{root}[/]")
+    ui.console.print(f"[dim]{root}[/]\n")
+    _print_tree(space.package, layout.tree_summary(refs))
     if dest:
         runtime.add_to_vscode(root)
-    if failed:
-        ui.console.print(f"[dim]{len(failed)} object(s) failed to pull[/]")
 
 
 def _refuse_to_discard(previous: Workspace) -> None:
@@ -145,22 +118,16 @@ def _refuse_to_discard(previous: Workspace) -> None:
     )
 
 
-async def _fetch_with_progress(adt, found, jobs: int) -> list[repository.Fetched]:
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=ui.console,
-    ) as progress:
-        task = progress.add_task(f"pulling {len(found)} objects", total=len(found))
-
-        def on_progress(result: repository.Fetched) -> None:
-            progress.advance(task)
-            if not result.ok:
-                progress.console.print(f"  [red]![/]  {result.obj.name}: {result.error}")
-
-        return await repository.fetch_sources(
-            adt, found, concurrency=jobs, on_progress=on_progress
-        )
+def _print_tree(package: str, summary: dict[str, int]) -> None:
+    tree = Tree(f"[bold]{package}[/]")
+    nodes: dict[str, Tree] = {}
+    for folder, count in summary.items():
+        parent = tree
+        trail = ""
+        for part in folder.split("/"):
+            trail = f"{trail}/{part}" if trail else part
+            if trail not in nodes:
+                nodes[trail] = parent.add(part)
+            parent = nodes[trail]
+        parent.label = f"{parent.label} [dim]({count})[/]"
+    ui.console.print(tree)

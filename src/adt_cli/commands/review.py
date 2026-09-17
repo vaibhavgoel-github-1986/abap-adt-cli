@@ -10,8 +10,8 @@ from typing import Annotated
 
 import typer
 
-from adt_cli import repository, runtime, ui, workspace
-from adt_cli.commands.options import DestOpt, JobsOpt, PackageArg, SystemOpt, TraceOpt
+from adt_cli import runtime, ui, workspace
+from adt_cli.commands.options import DestOpt, PackageArg, SystemOpt, TraceOpt
 from adt_cli.workspace import Workspace
 
 
@@ -39,12 +39,13 @@ def status(
         target, password = runtime.connect(system or space.system)
 
         async def body() -> tuple[list[str], list[str]]:
-            async with runtime.session(target, password) as adt:
-                return await runtime.remote_drift(adt, space, sorted(space.files))
+            async with runtime.zsync(target, password) as sap:
+                current = await runtime.remote_archive(sap, space)
+            return runtime.archive_drift(space, current, sorted(space.files))
 
-        drifted, unreadable = runtime.run(body)
-        for local in unreadable:
-            ui.console.print(f"  [yellow]?[/]  {local} could not be read")
+        drifted, vanished = runtime.run(body)
+        for local in vanished:
+            ui.console.print(f"  [yellow]?[/]  {local} no longer exists on the server")
 
     for local in modified:
         marker = ui.MARKER_BOTH if local in drifted else ui.MARKER_MINE
@@ -79,7 +80,6 @@ def diff(
     package: PackageArg = "",
     system: SystemOpt = "",
     dest: DestOpt = None,
-    jobs: JobsOpt = 16,
     trace: TraceOpt = False,
 ) -> None:
     """Show line differences between the server and your local files."""
@@ -88,11 +88,9 @@ def diff(
     space = runtime.load_workspace(root)
 
     # The manifest keeps hashes, not text, so the comparison has to come from the
-    # server. Same fetch status --remote does, kept instead of discarded.
+    # server. One export covers every file, the same call status --remote makes.
     present = []
     for local in sorted(space.files):
-        if not space.writable(local):
-            continue
         if space.resolve(local).is_file():
             present.append(local)
         else:
@@ -103,38 +101,42 @@ def diff(
 
     target, password = runtime.connect(system or space.system)
 
-    async def body() -> list[repository.Fetched]:
-        async with runtime.session(target, password, jobs) as adt:
-            return await repository.fetch_sources(
-                adt, [space.object_for(local) for local in present], concurrency=jobs
-            )
+    async def body() -> dict[str, bytes]:
+        async with runtime.zsync(target, password) as sap:
+            return await runtime.remote_archive(sap, space)
 
-    results = runtime.run(body)
+    remote = runtime.run(body)
 
     changed = 0
     overwrites = 0
-    for local, result in zip(present, results, strict=True):
-        if not result.ok:
-            ui.err_console.print(f"  [yellow]?[/]  {local} could not be read: {result.error}")
+    for local in present:
+        theirs_raw = remote.get(space.canonical_for(local))
+        if theirs_raw is None:
+            ui.err_console.print(f"  [yellow]?[/]  {local} is not on {target.name}")
             continue
-        mine = space.read(local)
-        if mine == result.text:
+        mine_raw = space.read_bytes(local)
+        if mine_raw == theirs_raw:
+            continue
+        mine, theirs = _as_text(mine_raw), _as_text(theirs_raw)
+        if mine is None or theirs is None:
+            ui.console.print(f"  {ui.MARKER_MINE}  {local}  [dim](binary, differs)[/]")
+            changed += 1
             continue
         changed += 1
         if changed == 1:
             ui.diff_legend(target.name)
-        marker, note = _attribution(space, local, mine, result.text, target.name)
+        marker, note = _attribution(space, local, mine_raw, theirs_raw, target.name)
         if marker != ui.MARKER_MINE:
             overwrites += 1
-        if mine.split() == result.text.split():
+        if mine.split() == theirs.split():
             note += ", whitespace only"
         ui.diff_header(marker, local, note)
-        ui.diff_body(result.text, mine)
+        ui.diff_body(theirs, mine)
 
     if not changed:
         ui.console.print(f"[green]no differences[/] - local files match {target.name}")
         return
-    ui.console.print(f"{changed} object(s) differ from {target.name}")
+    ui.console.print(f"{changed} file(s) differ from {target.name}")
     if overwrites:
         ui.console.print(
             f"[red]{overwrites} of them changed on {target.name} since your pull[/] - "
@@ -142,15 +144,23 @@ def diff(
         )
 
 
+def _as_text(data: bytes) -> str | None:
+    """None for the binary members abapGit exports, such as MIME objects."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def _attribution(
-    space: Workspace, local: str, mine: str, theirs_text: str, system: str
+    space: Workspace, local: str, mine: bytes, theirs: bytes, system: str
 ) -> tuple[str, str]:
     """A diff on its own cannot say which side moved; the baseline hash can."""
     base = space.files[local].sha256
     yours = workspace.sha256(mine) != base
-    theirs = workspace.sha256(theirs_text) != base
-    if yours and theirs:
+    theirs_moved = workspace.sha256(theirs) != base
+    if yours and theirs_moved:
         return ui.MARKER_BOTH, f"changed by you AND on {system}"
-    if theirs:
+    if theirs_moved:
         return ui.MARKER_THEIRS, f"changed on {system}, not by you"
     return ui.MARKER_MINE, "changed by you"
