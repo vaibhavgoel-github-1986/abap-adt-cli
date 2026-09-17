@@ -43,6 +43,13 @@ def pull(
             help="SE80 folder tree (default), or one flat src/ folder.",
         ),
     ] = None,
+    subpackages: Annotated[
+        bool | None,
+        typer.Option(
+            "--subpackages/--no-subpackages",
+            help="Also pull the packages below this one (default), or this one alone.",
+        ),
+    ] = None,
     jobs: JobsOpt = 16,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite local changes.")] = False,
     match: Annotated[
@@ -63,6 +70,10 @@ def pull(
 ) -> None:
     """Download a package into a local folder, in parallel.
 
+    The whole package hierarchy comes down by default, because a structure
+    package usually holds nothing but the sub-packages that hold the code.
+    Pass --no-subpackages to take the named package alone.
+
     Every editable text becomes its own file, so a class arrives as its main
     source plus any local definitions, local implementations, macros and test
     classes it has, and a function group brings its includes and function
@@ -79,6 +90,7 @@ def pull(
 
       abap pull ZMY_PACKAGE                    into ./ZMY_PACKAGE
       abap pull '$TMP'                         into ./<YOUR_USER>/$TMP
+      abap pull ZMY_PACKAGE --no-subpackages   that one package only
       abap pull ZMY_PACKAGE --type CLAS,DDLS   only those types
       abap pull ZMY_PACKAGE --match 'ZCL_A*'   only matching names
       abap pull --force                        refresh, discarding local edits
@@ -104,6 +116,12 @@ def pull(
 
     # A refresh keeps the layout it was pulled with; a fresh pull defaults to SE80.
     layout_se80 = (previous.se80 if previous.exists else True) if se80 is None else se80
+    # Likewise for breadth: a refresh reaches exactly as far as the pull it repeats.
+    recurse = (
+        (previous.subpackages if previous.exists else True)
+        if subpackages is None
+        else subpackages
+    )
     # A refresh keeps whatever narrowed the original pull, so it cannot silently widen.
     pattern = match or previous.match
     wanted = parse_types(types) or previous.types
@@ -118,12 +136,20 @@ def pull(
 
     started = time.perf_counter()
 
-    async def body() -> tuple[Workspace, list[repository.Fetched], int]:
+    async def body() -> tuple[Workspace, list[repository.Fetched], int, list[str]]:
         async with runtime.session(target, password, jobs) as adt:
             scope = f" owned by {owner_filter}" if owner_filter else ""
-            ui.console.print(f"[dim]connected to {target.name}, listing {package}{scope}...[/]")
-            found = await repository.list_package(
-                adt, package, pattern=pattern or "*", owner=owner_filter
+            tree = " and its sub-packages" if recurse else ""
+            ui.console.print(
+                f"[dim]connected to {target.name}, listing {package}{tree}{scope}...[/]"
+            )
+            found, packages = await repository.list_tree(
+                adt,
+                package,
+                pattern=pattern or "*",
+                owner=owner_filter,
+                recurse=recurse,
+                concurrency=jobs,
             )
             if wanted:
                 found = [obj for obj in found if wanted_type(obj.type_code, wanted)]
@@ -145,6 +171,7 @@ def pull(
                 package=package.upper(),
                 system=target.name,
                 se80=layout_se80,
+                subpackages=recurse,
                 match=pattern,
                 types=wanted,
                 owner=owner,
@@ -154,9 +181,9 @@ def pull(
                 if result.ok and not result.absent:
                     space.write(result.obj, result.text, result.part)
             space.save()
-            return space, results, elsewhere
+            return space, results, elsewhere, packages
 
-    space, results, elsewhere = runtime.run(body)
+    space, results, elsewhere, packages = runtime.run(body)
 
     elapsed = time.perf_counter() - started
     written = [result for result in results if result.ok and not result.absent]
@@ -169,9 +196,11 @@ def pull(
     }
     total = sum(len(result.text) for result in written)
     objects = len({(result.obj.type_code, result.obj.name) for result in written})
+    spread = f" across {len(packages)} packages" if len(packages) > 1 else ""
     ui.console.print(
         f"pulled [bold]{space.package}[/] from [bold]{target.name}[/] "
-        f"- {objects} objects in {len(written)} files, {total:,} bytes in {elapsed:.1f}s"
+        f"- {objects} objects in {len(written)} files{spread}, "
+        f"{total:,} bytes in {elapsed:.1f}s"
     )
     ui.console.print(f"[dim]{root}[/]")
     if dest:

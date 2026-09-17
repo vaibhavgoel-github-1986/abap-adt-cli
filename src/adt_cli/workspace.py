@@ -70,6 +70,7 @@ class Workspace:
     system: str = ""
     pulled_at: str = ""
     se80: bool = True
+    subpackages: bool = False
     match: str = ""
     types: list[str] = field(default_factory=list)
     owner: str = ""
@@ -106,6 +107,9 @@ class Workspace:
             system=str(raw.get("system", "")),
             pulled_at=str(raw.get("pulled_at", "")),
             se80=bool(raw.get("se80", True)),
+            # Absent in manifests written before sub-package pulls existed, and
+            # those held one package only, so a refresh must not widen.
+            subpackages=bool(raw.get("subpackages", False)),
             match=str(raw.get("match", "")),
             types=[str(entry) for entry in raw.get("types", [])],
             owner=str(raw.get("owner", "")),
@@ -127,6 +131,7 @@ class Workspace:
                 "system": self.system,
                 "pulled_at": self.pulled_at,
                 "se80": self.se80,
+                "subpackages": self.subpackages,
                 "match": self.match,
                 "types": self.types,
                 "owner": self.owner,

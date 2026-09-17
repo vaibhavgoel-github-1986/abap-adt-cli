@@ -17,9 +17,12 @@ from adt_cli.session import ADT_ROOT, AdtSession
 VIRTUAL_FOLDERS = "/sap/bc/adt/repository/informationsystem/virtualfolders/contents"
 REQUEST_TYPE = "application/vnd.sap.adt.repository.virtualfolders.request.v1+xml"
 RESULT_TYPE = "application/vnd.sap.adt.repository.virtualfolders.result.v1+xml"
+NODESTRUCTURE = "/sap/bc/adt/repository/nodestructure"
+PACKAGE_TYPE = "DEVC/K"
 
 _OBJECT = re.compile(r"<vfs:object\b([^>]*)/?>")
 _ATTR = re.compile(r'(\w+)="([^"]*)"')
+_NODE = re.compile(r"<SEU_ADT_REPOSITORY_OBJ_NODE>(.*?)</SEU_ADT_REPOSITORY_OBJ_NODE>", re.S)
 _UNSAFE_IN_FILENAME = re.compile(r"[^a-z0-9_$#\-.]")
 # Function modules and includes live under their group's URI; everything else
 # owns its own path.
@@ -168,6 +171,91 @@ async def list_package(
             found.append(RepoObject(name=name, type_code=attrs.get("type", ""), uri=uri))
     found.sort(key=lambda entry: (entry.type_code, entry.name))
     return found
+
+
+def _node_field(block: str, tag: str) -> str:
+    found = re.search(rf"<{tag}>(.*?)</{tag}>", block, re.S)
+    return found.group(1).strip() if found else ""
+
+
+async def nodes(session: AdtSession, parent_type: str, parent_name: str) -> list[RepoObject]:
+    """Children ADT lists directly under a repository node.
+
+    This is the SE80 tree: what a package contains, what a function group owns.
+    Rows without a name are the folder headers of that tree and are dropped.
+    """
+    reply = await session.request(
+        "POST",
+        NODESTRUCTURE,
+        params={
+            "parent_type": parent_type,
+            "parent_name": parent_name,
+            "withShortDescriptions": "true",
+        },
+        content="",
+        content_type="application/xml",
+        accept="application/*",
+    )
+    found: list[RepoObject] = []
+    for block in _NODE.findall(reply.text):
+        name = _node_field(block, "OBJECT_NAME")
+        type_code = _node_field(block, "OBJECT_TYPE")
+        if name and type_code:
+            found.append(
+                RepoObject(name=name, type_code=type_code, uri=_node_field(block, "OBJECT_URI"))
+            )
+    return found
+
+
+async def list_subpackages(session: AdtSession, package: str) -> list[str]:
+    """Names of the packages sitting directly below the given one."""
+    children = await nodes(session, PACKAGE_TYPE, package.upper())
+    return [child.name.upper() for child in children if child.type_code == PACKAGE_TYPE]
+
+
+async def list_tree(
+    session: AdtSession,
+    package: str,
+    *,
+    pattern: str = "*",
+    owner: str = "",
+    recurse: bool = True,
+    concurrency: int = 16,
+) -> tuple[list[RepoObject], list[str]]:
+    """Every object in a package and, when recursing, in the packages below it.
+
+    A package hierarchy is how SAP actually organises an application, so pulling
+    only the top node usually brings back the empty structure package and none
+    of the code. Returns the objects and the packages they came from, so the
+    caller can report how wide the pull went.
+
+    An object listed by two packages is kept once; a cycle in the hierarchy
+    terminates because a package is only ever visited once.
+    """
+    gate = asyncio.Semaphore(max(1, concurrency))
+
+    async def visit(name: str) -> tuple[list[RepoObject], list[str]]:
+        async with gate:
+            here = await list_package(session, name, pattern=pattern, owner=owner)
+            children = await list_subpackages(session, name) if recurse else []
+        return here, children
+
+    found: dict[tuple[str, str], RepoObject] = {}
+    visited: list[str] = []
+    seen = {package.upper()}
+    pending = [package.upper()]
+    while pending:
+        batch = await asyncio.gather(*(visit(name) for name in pending))
+        visited.extend(pending)
+        pending = []
+        for here, children in batch:
+            for obj in here:
+                found.setdefault((obj.type_code, obj.name), obj)
+            for child in children:
+                if child not in seen:
+                    seen.add(child)
+                    pending.append(child)
+    return sorted(found.values(), key=lambda entry: (entry.type_code, entry.name)), visited
 
 
 async def fetch_parts(

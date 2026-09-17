@@ -12,15 +12,12 @@ it and costs nothing.
 from __future__ import annotations
 
 import asyncio
-import re
 
 import httpx
 
 from adt_cli.errors import AdtError
-from adt_cli.repository import RepoObject
+from adt_cli.repository import RepoObject, nodes
 from adt_cli.session import AdtSession
-
-NODESTRUCTURE = "/sap/bc/adt/repository/nodestructure"
 
 # Group types whose children have to be resolved one level down.
 CONTAINERS = frozenset({"FUGR/F", "FUGS/FX"})
@@ -28,39 +25,13 @@ CONTAINERS = frozenset({"FUGR/F", "FUGS/FX"})
 # element pool, which lives under a different resource and has no source.
 CHILD_TYPES = frozenset({"FUGR/FF", "FUGR/I"})
 
-_NODE = re.compile(r"<SEU_ADT_REPOSITORY_OBJ_NODE>(.*?)</SEU_ADT_REPOSITORY_OBJ_NODE>", re.S)
-
-
-def _field(block: str, tag: str) -> str:
-    found = re.search(rf"<{tag}>(.*?)</{tag}>", block, re.S)
-    return found.group(1).strip() if found else ""
-
 
 async def children(session: AdtSession, parent: RepoObject) -> list[RepoObject]:
     """Function modules and includes belonging to a group, or [] for a leaf."""
     if parent.type_code not in CONTAINERS:
         return []
-    reply = await session.request(
-        "POST",
-        NODESTRUCTURE,
-        params={
-            "parent_type": parent.type_code,
-            "parent_name": parent.name,
-            "withShortDescriptions": "true",
-        },
-        content="",
-        content_type="application/xml",
-        accept="application/*",
-    )
-    found: list[RepoObject] = []
-    for block in _NODE.findall(reply.text):
-        name = _field(block, "OBJECT_NAME")
-        uri = _field(block, "OBJECT_URI")
-        type_code = _field(block, "OBJECT_TYPE")
-        # Rows without a name are the folder headers of the SE80 tree.
-        if name and uri and type_code in CHILD_TYPES:
-            found.append(RepoObject(name=name, type_code=type_code, uri=uri))
-    return found
+    found = await nodes(session, parent.type_code, parent.name)
+    return [child for child in found if child.uri and child.type_code in CHILD_TYPES]
 
 
 async def expand(

@@ -200,10 +200,11 @@ Full detail: [Object types](#object-types).
 
 #### `abap pull`
 
-Downloads a package into a folder and writes a manifest describing what was
-fetched. Run it with no arguments inside an existing workspace to refresh in
-place, keeping the same system, layout and any `--match` / `--type` / `--user`
-narrowing. Full detail: [Pulling](#pulling).
+Downloads a package and the packages below it into a folder, and writes a
+manifest describing what was fetched. Run it with no arguments inside an
+existing workspace to refresh in place, keeping the same system, layout, breadth
+and any `--match` / `--type` / `--user` narrowing. Full detail:
+[Pulling](#pulling).
 
 #### `abap status`
 
@@ -285,12 +286,37 @@ overwriting your work. `--force` discards local changes and re-downloads.
 | `--type` / `-t` | comma-separated ADT types, e.g. `'CLAS,DDLS'` |
 | `--user` / `-u` | object owner; defaults to you for `$` packages, `'*'` means everyone |
 | `--se80` / `--flat` | SE80 object tree (default), or one flat `src/` folder; a refresh keeps whatever the manifest recorded |
+| `--subpackages` / `--no-subpackages` | descend the package hierarchy (default), or take the named package alone |
 | `--jobs` / `-j` | parallel requests, default 16 |
 | `--force` / `-f` | discard local modifications and overwrite |
 | `--system` / `-s` | pull from a system other than the default, or the one recorded in the manifest |
 
 Objects that fail to download are reported individually and do not abort the
 pull; everything else still lands.
+
+### Sub-packages
+
+SAP applications are package *hierarchies*: the name you know is usually a
+structure package holding nothing but the sub-packages that hold the code. So
+`abap pull` walks the tree by default, listing each package it finds and then
+the packages below it, and reports how wide it went:
+
+```console
+$ abap pull ZS4INTCPQ
+connected to dha-110, listing ZS4INTCPQ and its sub-packages...
+  pulling 4812 objects ━━━━━━━━━━━━━━━━━━━━ 6701/6701 0:02:04
+pulled ZS4INTCPQ from dha-110 - 4790 objects in 4881 files across 9 packages, ...
+```
+
+An object listed by two packages is fetched once, and a cycle in the hierarchy
+terminates because each package is visited only once. `--match`, `--type`,
+`--user` and the chosen layout apply to the whole tree, and every object lands in
+the same workspace regardless of which package it came from — the manifest tracks
+objects, not packages.
+
+Pass `--no-subpackages` to take the named package alone. The choice is recorded
+in the manifest, so a later bare `abap pull` refresh reaches exactly as far as
+the pull it repeats and can never silently widen.
 
 ### Layout
 
@@ -1180,8 +1206,8 @@ abap pull ZGET_SUBS_API_V2
 ## How it works
 
 ```
-abap pull   →  POST /repository/informationsystem/virtualfolders/contents   (1 request)
-            →  POST /repository/nodestructure                   (function groups only)
+abap pull   →  POST /repository/informationsystem/virtualfolders/contents   (1 per package)
+            →  POST /repository/nodestructure                   (sub-packages, function groups)
             →  GET  <object><part>                              (parallel, one per part)
 
 abap diff   →  GET  <object><part>                       (parallel, text kept)
