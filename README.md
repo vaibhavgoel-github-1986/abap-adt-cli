@@ -8,7 +8,7 @@ system.
 ```bash
 abap pull ZMY_PACKAGE --dest ~/Documents/my-package
 abap status --remote
-abap push --transport DHAK900123
+abap push --transport DEVK900123
 ```
 
 ## Why this exists
@@ -59,21 +59,67 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.5.1"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.5.2"
 ```
 
 Afterwards `abap update` keeps it current — see
 [Versions and updating](#versions-and-updating).
 
-Then point it at a system and store the password once:
+## First-time setup
 
-```bash
-abap init          # name, host, user, client - prompts for anything you omit
-abap login         # password goes to the OS keychain, never to disk
-abap ping          # confirm ADT answers
+Three commands, once per system. `init` writes a connection profile, `login`
+puts the password in your OS keychain, `ping` proves both are right.
+
+**1. Describe the system.** `init` prompts for anything you leave out:
+
+```console
+$ abap init
+System name (e.g. dev-100): dev-100
+Host URL (https://host:port): https://sap.example.com:44300
+SAP user: DEVELOPER
+SAP client: 100
+saved dev-100 to /Users/you/.abap-adt/config.json
+next: abap login --system dev-100
 ```
 
-That is enough to start. Multi-system, CI and keychain details are in
+| Prompt | What it wants | Where to find it |
+| --- | --- | --- |
+| System name | any label you choose, later used as `--system dev-100` | your own convention; `<sid>-<client>` reads well |
+| Host URL | the ADT endpoint, scheme and port included | the same host and port your Eclipse ADT project uses |
+| SAP user | your SAP user name | SU3, or your logon screen |
+| SAP client | three digits | the client you log on to |
+
+Add `--insecure` if the system serves a self-signed certificate, which is common
+on internal dev boxes — without it the connection fails at the TLS handshake.
+Every `init` makes that system the default, and re-running it with the same name
+edits the profile in place.
+
+**2. Store the password.** It goes to the OS keychain, never to a file:
+
+```bash
+abap login
+```
+
+**3. Check it answers**, before waiting on a long pull:
+
+```console
+$ abap ping
+ADT alive on dev-100 client 100 as DEVELOPER  (24,118 bytes)
+```
+
+A failure here tells you which of the three things is wrong — host unreachable,
+credentials rejected, or ADT not enabled for your user. A host that is only
+reachable over VPN fails in about five seconds rather than hanging.
+
+**4. Pull a package.**
+
+```bash
+abap pull ZEXAMPLE_PKG --dest ~/Documents/example-pkg
+```
+
+That is the whole setup. `abap systems` lists what you have configured and marks
+the default with `*`. Anything beyond one system — several systems, CI without a
+keychain, changing a password — is in
 [Systems and credentials](#systems-and-credentials).
 
 ## Quick start
@@ -82,14 +128,14 @@ Pull a package into a folder you choose. With `--dest` that folder is also added
 to your active VS Code workspace:
 
 ```bash
-abap pull ZGET_SUBS_API_V2 --dest ~/Documents/ZGET_SUBS_API_V2
-cd ~/Documents/ZGET_SUBS_API_V2
+abap pull ZEXAMPLE_PKG --dest ~/Documents/example-pkg
+cd ~/Documents/example-pkg
 ```
 
 ```console
-connected to dha-110, listing ZGET_SUBS_API_V2 and its sub-packages...
+connected to dev-100, listing ZEXAMPLE_PKG and its sub-packages...
 pulling 30 objects ━━━━━━━━━━━━━━━━━━━━ 74/74 0:00:02
-pulled ZGET_SUBS_API_V2 from dha-110 - 30 objects in 38 files, 204,345 bytes in 2.3s
+pulled ZEXAMPLE_PKG from dev-100 - 30 objects in 38 files, 204,345 bytes in 2.3s
 ```
 
 That brings down the named package **and every package underneath it**, because
@@ -101,13 +147,13 @@ editable texts — a class is up to five. You now have ordinary files, laid out 
 way SE80 shows them, with every file of an object in one folder:
 
 ```
-Class Library/Classes/ZCL_SUBS_QUERY_PROVIDER/
-  zcl_subs_query_provider.clas.abap
-  zcl_subs_query_provider.clas.testclasses.abap
-Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/
-  zcds_i_cont_billsch.ddls.asddls
-Business Services/Service Definitions/ZSD_GET_SUBS_V2/
-  zsd_get_subs_v2.srvd.srvdsrv
+Class Library/Classes/ZCL_EXAMPLE_READER/
+  zcl_example_reader.clas.abap
+  zcl_example_reader.clas.testclasses.abap
+Core Data Services/Data Definitions/ZCDS_I_EXAMPLE/
+  zcds_i_example.ddls.asddls
+Business Services/Service Definitions/ZSD_EXAMPLE_API/
+  zsd_example_api.srvd.srvdsrv
 .adt/manifest.json        # what was pulled, from where, and its hashes
 ```
 
@@ -118,8 +164,8 @@ Edit them however you like, then see what you touched — offline and instant:
 
 ```console
 $ abap status
-ZGET_SUBS_API_V2 from dha-110, pulled 2026-09-14T17:37:49
-  M  Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/zcds_i_cont_billsch.ddls.asddls
+ZEXAMPLE_PKG from dev-100, pulled 2026-09-14T17:37:49
+  M  Core Data Services/Data Definitions/ZCDS_I_EXAMPLE/zcds_i_example.ddls.asddls
 
 1 modified, 0 deleted
 ```
@@ -129,12 +175,12 @@ Check nobody else moved, confirm the blast radius, then send it:
 ```bash
 abap status --remote              # did anyone change these on the server?
 abap push --dry-run               # what would be sent - makes no ADT calls
-abap push --transport DHAK907258
+abap push --transport DEVK900456
 ```
 
 ```console
-  M  Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/zcds_i_cont_billsch.ddls.asddls
-  pushed Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/zcds_i_cont_billsch.ddls.asddls
+  M  Core Data Services/Data Definitions/ZCDS_I_EXAMPLE/zcds_i_example.ddls.asddls
+  pushed Core Data Services/Data Definitions/ZCDS_I_EXAMPLE/zcds_i_example.ddls.asddls
 
 1 object(s) pushed
 ```
@@ -143,7 +189,7 @@ Pushed objects stay **inactive** until activated. Add `--activate` and push
 activates exactly what it just wrote:
 
 ```bash
-abap push --transport DHAK907258 --activate
+abap push --transport DEVK900456 --activate
 ```
 
 Three options are worth knowing from the start:
@@ -157,8 +203,8 @@ Three options are worth knowing from the start:
 `--trace` is accepted on either side of the command:
 
 ```bash
-abap push --transport DHAK900123 --trace
-abap --trace push --transport DHAK900123
+abap push --transport DEVK900123 --trace
+abap --trace push --transport DEVK900123
 ```
 
 ## Commands
@@ -297,7 +343,7 @@ overwriting your work. `--force` discards local changes and re-downloads.
 | Option | Effect |
 | --- | --- |
 | `--dest` / `-d` | exact target folder, plus `code --add` |
-| `--match` / `-m` | object name pattern, e.g. `'ZCL_SUBS*'` |
+| `--match` / `-m` | object name pattern, e.g. `'ZCL_EX*'` |
 | `--type` / `-t` | comma-separated ADT types, e.g. `'CLAS,DDLS'` |
 | `--user` / `-u` | object owner; defaults to you for `$` packages, `'*'` means everyone |
 | `--se80` / `--flat` | SE80 object tree (default), or one flat `src/` folder; a refresh keeps whatever the manifest recorded |
@@ -315,11 +361,11 @@ SAP applications are package *hierarchies*, and `abap pull` brings the whole
 hierarchy down by default:
 
 ```console
-$ abap pull ZS4INTCPQ
-connected to dha-110, listing ZS4INTCPQ and its sub-packages...
+$ abap pull ZEXAMPLE_SUITE
+connected to dev-100, listing ZEXAMPLE_SUITE and its sub-packages...
 5154 objects in 9 packages
   pulling 4812 objects ━━━━━━━━━━━━━━━━━━━━ 6701/6701 0:02:04
-pulled ZS4INTCPQ from dha-110 - 4790 objects in 4881 files across 9 packages, ...
+pulled ZEXAMPLE_SUITE from dev-100 - 4790 objects in 4881 files across 9 packages, ...
 ```
 
 The listing endpoint does most of that on its own: SAP's `package` facet is
@@ -332,7 +378,7 @@ as well, then drops everything they account for, leaving only what sits directly
 in the package you named:
 
 ```console
-$ abap pull ZS4INTCPQ --no-subpackages
+$ abap pull ZEXAMPLE_SUITE --no-subpackages
 5046 objects in 1 package
 ```
 
@@ -359,14 +405,14 @@ The default is an SE80-style tree. Each object gets a folder inside its type
 folder, and everything belonging to that object lives in it:
 
 ```
-Class Library/Classes/ZCL_TSTMP_UTILITIES/
-  zcl_tstmp_utilities.clas.abap
-  zcl_tstmp_utilities.clas.locals_imp.abap
-  zcl_tstmp_utilities.clas.testclasses.abap
-Function Groups/ZFG_SUBS/
-  zfg_subs.fugr.abap                 # the group's main program
-  lzfg_substop.fugr.abap             # its includes
-  z_subs_read.fugr.abap              # and its function modules
+Class Library/Classes/ZCL_EXAMPLE_UTILS/
+  zcl_example_utils.clas.abap
+  zcl_example_utils.clas.locals_imp.abap
+  zcl_example_utils.clas.testclasses.abap
+Function Groups/ZFG_EXAMPLE/
+  zfg_example.fugr.abap              # the group's main program
+  lzfg_exampletop.fugr.abap          # its includes
+  z_example_read.fugr.abap           # and its function modules
 ```
 
 `--flat` puts every file in a single `src/` folder instead, which is easier to
@@ -419,8 +465,8 @@ authenticated as:
 
 ```console
 $ abap pull '$TMP' --dest ~/Documents/my-local
-connected to dha-110, listing $TMP owned by VAIBHAGO...
-pulled $TMP from dha-110 - 69 objects in 84 files, 273,395 bytes in 5.8s
+connected to dev-100, listing $TMP owned by DEVELOPER...
+pulled $TMP from dev-100 - 69 objects in 84 files, 273,395 bytes in 5.8s
 ```
 
 Quote it. `$TMP` is a variable reference to your shell, and unquoted it expands
@@ -443,12 +489,12 @@ The default SE80 tree is the same grouping Eclipse shows under a user's `$TMP`,
 which makes a folder per developer easy to browse side by side:
 
 ```bash
-abap pull '$TMP' --dest ~/Documents/VAIBHAGO
+abap pull '$TMP' --dest ~/Documents/DEVELOPER
 abap pull '$TMP' --user ANOTHER_DEV --dest ~/Documents/ANOTHER_DEV
 ```
 
 ```
-VAIBHAGO/
+DEVELOPER/
   Business Services/{Service Bindings,Service Definitions}   4
   Class Library/{Classes,Interfaces}                        22
   Core Data Services/{Data Definitions,Behavior,...}        15
@@ -470,9 +516,9 @@ transported. See [Guard rails](#guard-rails).
 They combine, and either one alone is enough:
 
 ```bash
-abap pull ZGET_SUBS_API_V2 --type CLAS,INTF        # just the ABAP OO objects
-abap pull ZGET_SUBS_API_V2 --match 'ZCDS_I_*'      # just those CDS views
-abap pull ZGET_SUBS_API_V2 --match 'ZCL_SUBS*' --type CLAS
+abap pull ZEXAMPLE_PKG --type CLAS,INTF        # just the ABAP OO objects
+abap pull ZEXAMPLE_PKG --match 'ZCDS_I_*'      # just those CDS views
+abap pull ZEXAMPLE_PKG --match 'ZCL_EX*' --type CLAS
 ```
 
 `--type` accepts either the short form (`CLAS`, `DDLS`) or the full ADT code
@@ -508,7 +554,7 @@ the first five happen before any network call:
 | Variation | What it does |
 | --- | --- |
 | `abap push` | refused on a transportable package — a transport is never invented for you |
-| `abap push --transport DHAK900123` | the normal case: checks drift, then pushes every locally modified object under that TR |
+| `abap push --transport DEVK900123` | the normal case: checks drift, then pushes every locally modified object under that TR |
 | `abap push --dry-run` | lists exactly what would be sent and stops. Fully offline — it makes no ADT calls at all |
 | `abap push --force` | skips the drift check and overwrites whatever is on the server. Use only when you know your copy should win |
 | `abap push --dest <path>` | pushes the workspace at that path instead of the current directory |
@@ -528,21 +574,21 @@ the source into it, the same two steps Eclipse performs when you add a class:
 
 ```console
 $ abap status
-  A  src/zce_push_new_test.ddls.asddls  (new, not in SAP yet)
-  A  src/zcl_push_new_test.clas.abap  (new, not in SAP yet)
+  A  src/zce_new_view.ddls.asddls  (new, not in SAP yet)
+  A  src/zcl_new_thing.clas.abap  (new, not in SAP yet)
 
 0 modified, 2 new, 0 deleted
 
-$ abap push --transport DHAK907262 --activate
-  A  src/zce_push_new_test.ddls.asddls  (new)
-  A  src/zcl_push_new_test.clas.abap  (new)
-  created ZCE_PUSH_NEW_TEST
-  created ZCL_PUSH_NEW_TEST
+$ abap push --transport DEVK900201 --activate
+  A  src/zce_new_view.ddls.asddls  (new)
+  A  src/zcl_new_thing.clas.abap  (new)
+  created ZCE_NEW_VIEW
+  created ZCL_NEW_THING
 
 activating 2 object(s)...
 
 2 object(s) pushed
-activated 2 object(s) on dha-110
+activated 2 object(s) on dev-100
 ```
 
 The object name comes from the filename and the type from the extension, so
@@ -573,15 +619,15 @@ A push leaves inactive versions behind, exactly as editing in Eclipse does.
 
 ```console
 $ abap push --activate
-  M  src/zcl_tstmp_utilities.clas.abap
-using DHAK907262 (VAIBHAGO, 'Testing 2') - it already holds these objects
-  recording under your task DHAK907263
-  pushed ZCL_TSTMP_UTILITIES
+  M  src/zcl_example_utils.clas.abap
+using DEVK900201 (DEVELOPER, 'Example work') - it already holds these objects
+  recording under your task DEVK900202
+  pushed ZCL_EXAMPLE_UTILS
 
 activating 1 object(s)...
 
 1 object(s) pushed
-activated 1 object(s) on dha-110
+activated 1 object(s) on dev-100
 ```
 
 It activates **only the objects that were just pushed**, never the whole
@@ -600,10 +646,10 @@ command exits non-zero so a script stops:
 
 ```console
 $ abap push --activate
-  pushed ZCL_TSTMP_UTILITIES
+  pushed ZCL_EXAMPLE_UTILS
 
 activating 1 object(s)...
-  !  CLAS ZCL_TSTMP_UTILITIES line 42: Field "LV_MISSING" is unknown.
+  !  CLAS ZCL_EXAMPLE_UTILS line 42: Field "LV_MISSING" is unknown.
 error 1 activation error(s) - the objects stay inactive until they are fixed
 ```
 
@@ -618,14 +664,14 @@ takes object *names* rather than file paths, only accepts objects the workspace
 already tracks, and asks before it acts.
 
 ```console
-$ abap delete ZCL_CLI_TR_DEMO
-  D  ZCL_CLI_TR_DEMO  (src/zcl_cli_tr_demo.clas.abap)
+$ abap delete ZCL_EXAMPLE_DEMO
+  D  ZCL_EXAMPLE_DEMO  (src/zcl_example_demo.clas.abap)
 
-This deletes 1 object(s) from dha-110. Deleted objects cannot be restored by this CLI.
+This deletes 1 object(s) from dev-100. Deleted objects cannot be restored by this CLI.
 Continue? [y/N]: y
-using DHAK907262 (VAIBHAGO, 'Testing 2') - it already holds these objects
-  recording under your task DHAK907263
-  deleted ZCL_CLI_TR_DEMO
+using DEVK900201 (DEVELOPER, 'Example work') - it already holds these objects
+  recording under your task DEVK900202
+  deleted ZCL_EXAMPLE_DEMO
 
 1 object(s) deleted
 ```
@@ -653,12 +699,12 @@ single request.
 ```console
 $ abap transports --unreleased
 workbench / modifiable
-  DHAK907310  O2CSM-33904 Get Subs API V2 - snapshot buffer
-      task DHAK907311  VAIBHAGO
+  DEVK900101  ABC-1234 example read buffer
+      task DEVK900102  DEVELOPER
 
 customizing / modifiable
-  DHAK907094  BIL_O2CSM-33711 Usage Anomaly Detection
-      task DHAK907095  VAIBHAGO
+  DEVK900105  ABC-5678 example configuration
+      task DEVK900106  DEVELOPER
 
 2 request(s)
 ```
@@ -683,10 +729,10 @@ with its folder is still in that folder.
 ### Creating one
 
 ```console
-$ abap transports new 'O2CSM-33904 Get Subs API V2 - snapshot buffer'
-created DHAK907310  O2CSM-33904 Get Subs API V2 - snapshot buffer
-  task DHAK907311  VAIBHAGO
-abap push --transport DHAK907310
+$ abap transports new 'ABC-1234 example read buffer'
+created DEVK900101  ABC-1234 example read buffer
+  task DEVK900102  DEVELOPER
+abap push --transport DEVK900101
 ```
 
 `--customizing` makes a type `W` request instead of type `K`. The transport
@@ -715,23 +761,23 @@ CTS attributes are the Jira keys and release markers your system defines on a
 request. `attr` shows them, and sets them:
 
 ```console
-$ abap transports attr DHAK907312 Z_JIRA_US=O2CSM-1234
-  +  Z_JIRA_US (Jira User Story) = O2CSM-1234
+$ abap transports attr DEVK900103 Z_TICKET=ABC-1234
+  +  Z_TICKET (Ticket reference) = ABC-1234
 
-  Z_JIRA_FEATURE (Feature User Story) = O2CSM-5678
-  Z_JIRA_US (Jira User Story) = O2CSM-1234
+  Z_FEATURE (Feature reference) = ABC-5678
+  Z_TICKET (Ticket reference) = ABC-1234
 
-2 attribute(s) on DHAK907312
+2 attribute(s) on DEVK900103
 ```
 
 `--attr` / `-a` sets them at creation time, repeat it per attribute:
 
 ```console
-$ abap transports new 'O2CSM-1234 fix' -a Z_JIRA_US=O2CSM-1234 -a Z_JIRA_FEATURE=O2CSM-5678
-created DHAK907312  O2CSM-1234 fix
-  task DHAK907313  VAIBHAGO
-  +  Z_JIRA_US (Jira User Story) = O2CSM-1234
-  +  Z_JIRA_FEATURE (Feature User Story) = O2CSM-5678
+$ abap transports new 'ABC-1234 fix' -a Z_TICKET=ABC-1234 -a Z_FEATURE=ABC-5678
+created DEVK900103  ABC-1234 fix
+  task DEVK900104  DEVELOPER
+  +  Z_TICKET (Ticket reference) = ABC-1234
+  +  Z_FEATURE (Feature reference) = ABC-5678
 ```
 
 That is create-then-set, not one call: SAP has no way to carry attributes on the
@@ -748,9 +794,9 @@ current list is read immediately before every write.
 
 ```console
 $ abap transports attr --names
-  Z_JIRA_DEPLOYMENT  Deployment Jira US
-  Z_JIRA_FEATURE  Feature User Story
-  Z_JIRA_US  Jira User Story
+  Z_DEPLOYMENT  Deployment reference
+  Z_FEATURE  Feature reference
+  Z_TICKET  Ticket reference
 
 46 attribute(s) defined on this system
 ```
@@ -762,19 +808,19 @@ hides from the dialog. Anything the value help omits is refused by SAP rather
 than silently ignored:
 
 ```console
-$ abap transports attr DHAK907312 Z_NOT_A_THING=x
+$ abap transports attr DEVK900103 Z_NOT_A_THING=x
 error Z_NOT_A_THING is not a valid attribute; enter a valid attribute
 ```
 
 ### Deleting a request
 
 ```console
-$ abap transports delete DHAK907312
-DHAK907312
-  task DHAK907313  VAIBHAGO  Modifiable
+$ abap transports delete DEVK900103
+DEVK900103
+  task DEVK900104  DEVELOPER  Modifiable
   D  R3TR CLAS ZCL_THING
 
-This deletes DHAK907312 and the 1 object(s) in it. A deleted request cannot be
+This deletes DEVK900103 and the 1 object(s) in it. A deleted request cannot be
 restored by this CLI.
 Continue? [y/N]:
 ```
@@ -791,17 +837,17 @@ checked for shape before anything connects, so a typo costs nothing.
 `abap transport` inspects a request, and adds or removes objects in it:
 
 ```console
-$ abap transport DHAK907262 list
-task DHAK907263  VAIBHAGO  Modifiable
-  locked  R3TR CLAS ZCL_SUBS_QUERY_PROVIDER
-  locked  R3TR DDLS ZCE_HEADER
+$ abap transport DEVK900201 list
+task DEVK900202  DEVELOPER  Modifiable
+  locked  R3TR CLAS ZCL_EXAMPLE_READER
+  locked  R3TR DDLS ZCE_EXAMPLE
 
-2 object(s) in DHAK907262
+2 object(s) in DEVK900201
 
-$ abap transport DHAK907274 add ZCL_TSTMP_UTILITIES
-  +  R3TR CLAS ZCL_TSTMP_UTILITIES
+$ abap transport DEVK900301 add ZCL_EXAMPLE_UTILS
+  +  R3TR CLAS ZCL_EXAMPLE_UTILS
 
-1 object(s) in DHAK907274
+1 object(s) in DEVK900301
 ```
 
 Objects live in *tasks*, not requests, so a request number is resolved to the
@@ -813,18 +859,18 @@ Three forms, because not every entry is a whole object:
 
 | Form | Records | Example |
 | --- | --- | --- |
-| `NAME` | `R3TR` + the type from the workspace manifest | `ZCL_TSTMP_UTILITIES` |
-| `CLASS=>METHOD` | `LIMU METH` — one method on its own | `ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET` |
+| `NAME` | `R3TR` + the type from the workspace manifest | `ZCL_EXAMPLE_UTILS` |
+| `CLASS=>METHOD` | `LIMU METH` — one method on its own | `ZCL_EXAMPLE_UTILS=>GET_OFFSET` |
 | `PGMID:TYPE:NAME` | exactly what you type | `R3TR:TABL:ZMY_TABLE` |
 
 The method form is the one that matters for shared classes, and produces the
 same entry SAP writes when you edit a single method in Eclipse:
 
 ```console
-$ abap transport DHAK907275 add 'ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET'
-  +  LIMU METH ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
+$ abap transport DEVK900302 add 'ZCL_EXAMPLE_UTILS=>GET_OFFSET'
+  +  LIMU METH ZCL_EXAMPLE_UTILS             GET_OFFSET
 
-1 object(s) in DHAK907275
+1 object(s) in DEVK900302
 ```
 
 That spacing is not cosmetic: SAP stores a `LIMU METH` key as the class name
@@ -845,11 +891,11 @@ position in the request, not by name, so the current contents are read
 immediately before the write — positions shift as entries go:
 
 ```console
-$ abap transport DHAK907262 remove ZCL_PUSH_NEW_TEST ZCE_PUSH_NEW_TEST
-  -  R3TR CLAS ZCL_PUSH_NEW_TEST removed
-  -  R3TR DDLS ZCE_PUSH_NEW_TEST removed
+$ abap transport DEVK900201 remove ZCL_NEW_THING ZCE_NEW_VIEW
+  -  R3TR CLAS ZCL_NEW_THING removed
+  -  R3TR DDLS ZCE_NEW_VIEW removed
 
-2 object(s) removed from DHAK907262
+2 object(s) removed from DEVK900201
 ```
 
 The result is read back afterwards rather than trusting the `200`: omit the
@@ -914,7 +960,7 @@ SAP service owns, such as enterprise service proxies. All of them are counted in
 one line rather than producing a 404 each:
 
 ```console
-pulled ZS4INTCPQ from dha-110 - 3894 objects in 3974 files in 97.6s
+pulled ZEXAMPLE_SUITE from dev-100 - 3894 objects in 3974 files in 97.6s
 1664 object(s) have no editable content in ADT and were skipped
 ```
 
@@ -934,7 +980,7 @@ itself, which is how the XML-backed types are written.
 
 ```console
 $ abap push
-error package ZGET_SUBS_API_V2 is transportable - pass --transport <TR>
+error package ZEXAMPLE_PKG is transportable - pass --transport <TR>
       (only local $ packages can push without one)
 ```
 
@@ -944,9 +990,9 @@ system and no other, so a diff against anything else is meaningless. `--system`
 may name that system, but it cannot redirect the push:
 
 ```console
-$ abap push --system qha-300 --transport DHAK900123
-error workspace was pulled from dha-110, refusing to push to qha-300 -
-      pull the package from qha-300 into its own folder if that is the real target
+$ abap push --system qa-300 --transport DEVK900123
+error workspace was pulled from dev-100, refusing to push to qa-300 -
+      pull the package from qa-300 into its own folder if that is the real target
 ```
 
 Moving code between systems is what the transport route is for, not a re-pointed
@@ -961,10 +1007,10 @@ reject any other — so push adopts it and says so:
 
 ```console
 $ abap push
-  M  src/zcl_tstmp_utilities.clas.abap
-using DHAK907258 (VAIBHAGO, 'Testing') - it already holds these objects
-  recording under your task DHAK907259
-  pushed ZCL_TSTMP_UTILITIES
+  M  src/zcl_example_utils.clas.abap
+using DEVK900456 (DEVELOPER, 'Example work') - it already holds these objects
+  recording under your task DEVK900457
+  pushed ZCL_EXAMPLE_UTILS
 
 1 object(s) pushed
 ```
@@ -973,18 +1019,18 @@ If the request is open but you have no task in it — developer A holds the obje
 under their task — SAP opens one for you, and push reports that instead:
 
 ```
-using DHAK907258 (CHANDRRA, 'Feature work') - it already holds these objects
-  SAP will open a task for VAIBHAGO in it
+using DEVK900456 (ANOTHER_DEV, 'Feature work') - it already holds these objects
+  SAP will open a task for DEVELOPER in it
 ```
 
 `--transport` is still honoured, and still checked. Pass one that does not lead
 to the holding request and push stops before writing:
 
 ```console
-$ abap push --transport DHAK900123
-  !  src/zcl_tstmp_utilities.clas.abap is locked in DHAK907258 (VAIBHAGO, 'Testing')
-error 1 object(s) already locked in DHAK907258, not DHAK900123 - SAP locks an
-      object in one request only, so re-run with --transport DHAK907258
+$ abap push --transport DEVK900123
+  !  src/zcl_example_utils.clas.abap is locked in DEVK900456 (DEVELOPER, 'Example work')
+error 1 object(s) already locked in DEVK900456, not DEVK900123 - SAP locks an
+      object in one request only, so re-run with --transport DEVK900456
 ```
 
 The request number and any task number inside it are all accepted, since they
@@ -995,16 +1041,16 @@ these objects yet, so there is nothing to infer and nothing is invented for you:
 
 ```console
 $ abap push
-error package ZGET_SUBS_API_V2 is transportable - pass --transport <TR>
+error package ZEXAMPLE_PKG is transportable - pass --transport <TR>
       (only local $ packages can push without one)
 ```
 
 Mixed pushes are handled the obvious way. If two of three objects sit in
-`DHAK907258` and the third is in no request at all, the third joins the same
+`DEVK900456` and the third is in no request at all, the third joins the same
 request and is called out by name rather than slipped in quietly:
 
 ```console
-  +  src/zcl_new_helper.clas.abap is in no request yet, it will be added to DHAK907258
+  +  src/zcl_new_helper.clas.abap is in no request yet, it will be added to DEVK900456
 ```
 
 Objects spanning *several* requests are refused, with the request numbers listed,
@@ -1018,8 +1064,8 @@ somebody else is holding the object, SAP refuses the lock and push stops with th
 server's own message, having written nothing to that object:
 
 ```console
-$ abap push --transport DHAK900123
-error User CHANDRRA is currently editing ZCL_TSTMP_UTILITIES
+$ abap push --transport DEVK900123
+error User ANOTHER_DEV is currently editing ZCL_EXAMPLE_UTILS
 ```
 
 Locks are session-bound, so they cannot leak: the unlock runs even when the write
@@ -1041,7 +1087,7 @@ three cases:
 
 ```console
 $ abap status --remote
-  C  src/zcl_tstmp_utilities.clas.abap  (also changed on server)
+  C  src/zcl_example_utils.clas.abap  (also changed on server)
 
 1 modified, 0 deleted, 1 changed on server
 1 conflict(s) - push will refuse these until you re-pull
@@ -1050,8 +1096,8 @@ $ abap status --remote
 Push performs the same check and stops before writing anything:
 
 ```console
-$ abap push --transport DHAK900123
-  C  src/zcl_tstmp_utilities.clas.abap also changed on dha-110 since your pull
+$ abap push --transport DEVK900123
+  C  src/zcl_example_utils.clas.abap also changed on dev-100 since your pull
 error 1 object(s) changed on the server - pushing would overwrite that work.
       Re-pull to inspect, or use --force to overwrite.
 ```
@@ -1136,12 +1182,12 @@ SAP — and, from the manifest baseline, **who** changed it:
 
 ```console
 $ abap diff
-'-' is dha-110 as it stands now, '+' is your local copy - what push would make it
+'-' is dev-100 as it stands now, '+' is your local copy - what push would make it
 trailing spaces shown as ·, tabs as →
 
-  R  src/zcds_i_cont_billsch.ddls.asddls  (changed on dha-110, not by you)
+  R  src/zcds_i_example.ddls.asddls  (changed on dev-100, not by you)
   line 8
-   as select from zdt_cont_billsch
+   as select from zdt_example
 
  {
 -  key object_id,  //changes
@@ -1153,8 +1199,8 @@ trailing spaces shown as ·, tabs as →
 +      cycle_end_date
  }
 
-1 object(s) differ from dha-110
-1 of them changed on dha-110 since your pull - pushing would overwrite that work, re-pull instead
+1 object(s) differ from dev-100
+1 of them changed on dev-100 since your pull - pushing would overwrite that work, re-pull instead
 ```
 
 Two readability details, because an ABAP diff is often whitespace: changed lines
@@ -1182,8 +1228,8 @@ one GET per tracked object.
 Git is still worth adding on top if you want local history and revert:
 
 ```bash
-cd ~/Documents/ZGET_SUBS_API_V2
-git init && git add -A && git commit -m "baseline: pulled from dha-110"
+cd ~/Documents/example-pkg
+git init && git add -A && git commit -m "baseline: pulled from dev-100"
 ```
 
 That buys `git diff` offline, plus `git checkout -- <file>` to throw a change
@@ -1198,7 +1244,6 @@ they are one-off setup steps rather than part of the edit cycle:
 
 | Task | Where |
 | --- | --- |
-| create a transport request | Eclipse/ADT, SE09, or an MCP server |
 | release a transport | SE09/SE10 |
 | object types outside the registry | Eclipse/ADT or SAP GUI |
 | SEGW projects, SICF nodes, DDIC views | SAP GUI — no ADT editor exists |
@@ -1219,7 +1264,7 @@ colleague can work on a different method in a different transport, and importing
 your transport will not revert theirs.
 
 ```
-DHAK907236   LIMU   METH   ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
+DEVK900303   LIMU   METH   ZCL_EXAMPLE_UTILS             GET_OFFSET
 ```
 
 **The whole object, not just its main source.** A class comes down as its own
@@ -1244,22 +1289,22 @@ interactively — `init` prompts for anything you leave out:
 
 ```console
 $ abap init
-System name (e.g. dev-100): dha-110
+System name (e.g. dev-100): dev-100
 Host URL (https://host:port): https://sap.example.com:44300
 SAP user: DEVELOPER
-SAP client: 110
-saved dha-110 to /Users/you/.abap-adt/config.json
-next: abap login --system dha-110
+SAP client: 100
+saved dev-100 to /Users/you/.abap-adt/config.json
+next: abap login --system dev-100
 ```
 
 Or non-interactively, which is what you want in a script:
 
 ```bash
-abap init --name dha-110 \
+abap init --name dev-100 \
           --host https://sap.example.com:44300 \
           --user DEVELOPER \
-          --client 110 \
-          --description "Dev, client 110"
+          --client 100 \
+          --description "Dev, client 100"
 ```
 
 Add `--insecure` to skip TLS verification for systems with a self-signed
@@ -1269,10 +1314,10 @@ Then store the password once. It goes to the OS keychain under service
 `abap-adt-cli`, account `<system>:<user>` — never to a file, never to the config:
 
 ```bash
-abap login --system dha-110     # prompts, input hidden
-abap ping   --system dha-110    # confirm it works
+abap login --system dev-100     # prompts, input hidden
+abap ping   --system dev-100    # confirm it works
 abap systems                    # list them all, '*' marks the default
-abap logout --system dha-110    # remove the stored password
+abap logout --system dev-100    # remove the stored password
 ```
 
 Omit `--system` on any of these when you only have one system, or when the one
@@ -1302,12 +1347,12 @@ On a headless Linux box with no Secret Service running, `abap login` reports
 Run `login` again. It overwrites whatever was stored for that system:
 
 ```bash
-abap login --system dha-110     # after a SAP password change
-abap ping  --system dha-110     # confirm the new one works
+abap login --system dev-100     # after a SAP password change
+abap ping  --system dev-100     # confirm the new one works
 ```
 
 This is also the fix when a push suddenly fails with `authentication failed`
-after a periodic SAP password expiry. `abap logout --system dha-110` deletes the
+after a periodic SAP password expiry. `abap logout --system dev-100` deletes the
 entry outright, and the next command falls back to prompting.
 
 ### Editing or removing a system
@@ -1316,7 +1361,7 @@ Re-running `init` with an existing name overwrites that profile and makes it the
 default again — that is how you move a system to a new host or client:
 
 ```bash
-abap init --name dha-110 --host https://newhost:44300 --user DEVELOPER --client 110
+abap init --name dev-100 --host https://newhost:44300 --user DEVELOPER --client 100
 ```
 
 There is no `remove` command yet. Delete the entry from `config.json` by hand,
@@ -1335,14 +1380,14 @@ secrets:
 
 ```json
 {
-  "default_system": "dha-110",
+  "default_system": "dev-100",
   "systems": {
-    "dha-110": {
+    "dev-100": {
       "host": "https://sap.example.com:44300",
       "user": "DEVELOPER",
-      "client": "110",
+      "client": "100",
       "insecure": false,
-      "description": "Dev, client 110"
+      "description": "Dev, client 100"
     }
   }
 }
@@ -1376,9 +1421,9 @@ override the profile, so a system need not be configured at all:
 ```bash
 export ADT_HOST=https://sap.example.com:44300
 export ADT_USER=DEVELOPER
-export ADT_CLIENT=110
+export ADT_CLIENT=100
 export ABAP_PASSWORD=...        # from your CI secret store
-abap pull ZGET_SUBS_API_V2
+abap pull ZEXAMPLE_PKG
 ```
 
 ## How it works
@@ -1423,11 +1468,11 @@ not make every object look modified.
 
 ```console
 $ abap version
-abap-adt-cli 0.1.0 (pipx, /Users/you/Library/Application Support/pipx/venvs/abap-adt-cli)
+abap-adt-cli 1.5.0 (pipx, /Users/you/Library/Application Support/pipx/venvs/abap-adt-cli)
 
 $ abap version --check
-abap-adt-cli 0.1.0 (pipx, ...)
-0.2.0 is available - run 'abap update'
+abap-adt-cli 1.5.0 (pipx, ...)
+1.5.2 is available - run 'abap update'
 ```
 
 The version is read from the *installed distribution*, not from the source tree,
@@ -1436,7 +1481,7 @@ so a checkout sitting next to an older installed copy cannot make it lie.
 ```bash
 abap update              # install the newest release, if it is newer
 abap update --check      # print the command it would run, change nothing
-abap update --version v0.2.0
+abap update --version v1.5.2
 abap update --force      # reinstall even when nothing is newer
 ```
 
@@ -1460,8 +1505,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.5.1"
-git tag v1.5.1
+git commit -am "release 1.5.2"
+git tag v1.5.2
 git push && git push --tags
 ```
 
@@ -1470,14 +1515,16 @@ when no release has been published for it.
 
 ## Project status
 
-First release: **v0.1.0**. Every command below has been exercised against a live
-S/4HANA system, not only unit-tested — pulling a 30-object package, creating and
-deleting objects, method-level transport entries, the transport guard, conflict
-detection, and a single activation run resolving a cyclic CDS dependency that
+Every command has been exercised against a live S/4HANA system, not only
+unit-tested — pulling a package hierarchy of several thousand objects, creating
+and deleting objects, method-level transport entries, the transport guard,
+conflict detection, creating and deleting transport requests with their CTS
+attributes, and a single activation run resolving a cyclic CDS dependency that
 would fail if the objects were activated one at a time.
 
-Not yet implemented: where-used, syntax check, unit test runs, and creating a
-transport request — for those, reach for ADT/Eclipse or an MCP server. See
+Not yet implemented: where-used, syntax check, unit test runs, releasing a
+transport, and creating a *local* request for a local package. For those, reach
+for ADT/Eclipse or an MCP server. See
 [What still needs SAP tooling](#what-still-needs-sap-tooling).
 
 ### Known rough edges
@@ -1488,6 +1535,8 @@ transport request — for those, reach for ADT/Eclipse or an MCP server. See
 - A *new* `.fugr.abap` file is created as a function group, because four ADT
   types share that extension. Create new function modules in Eclipse/ADT, then
   re-pull. See [New objects](#new-objects).
+- `abap transports new` always produces a *transportable* request, so it cannot
+  be used for objects in a local package. See [Creating one](#creating-one).
 
 ## Licence
 
