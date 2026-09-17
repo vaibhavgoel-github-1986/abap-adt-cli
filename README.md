@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.5.0"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.5.1"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -692,6 +692,18 @@ abap push --transport DHAK907310
 `--customizing` makes a type `W` request instead of type `K`. The transport
 target is left to SAP unless `--target` says otherwise, so the transport layer
 of the package decides where the request goes rather than a guess made here.
+
+The task inside it is classified as *Development/Correction* (or *Customizing*)
+as a second step, because SAP creates every task through this API as
+*Unclassified* whatever the create payload asks for, and an unclassified task
+refuses every object with `Changes to objects are only allowed in
+correction/repair`.
+
+A request created this way is a *transportable* one. Objects in a **local**
+package can only live in a **local** request — SAP says `Only edit objects from
+package X in local requests` — and those are the ones SAP generates for you.
+There is no way to ask for a local request here yet, so for a local package,
+reuse the generated request instead of making a new one.
 
 Descriptions are checked against SAP's 60-character limit before anything is
 sent, because a request created with a truncated description has to be deleted
@@ -1448,8 +1460,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.5.0"
-git tag v1.5.0
+git commit -am "release 1.5.1"
+git tag v1.5.1
 git push && git push --tags
 ```
 

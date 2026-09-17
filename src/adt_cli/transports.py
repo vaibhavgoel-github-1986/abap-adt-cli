@@ -25,6 +25,10 @@ NAMED_ITEMS = "application/xml, application/vnd.sap.adt.nameditems.v1+xml"
 # tm:type on a request. SAP spells the two categories as single letters.
 WORKBENCH = "K"
 CUSTOMIZING = "W"
+# tm:type on the task inside it. SAP creates the task 'Unclassified' whatever
+# the newrequest payload says, and an unclassified task refuses every object
+# with "changes are only allowed in correction/repair" - so it is set after.
+TASK_TYPE = {WORKBENCH: "S", CUSTOMIZING: "Q"}
 # requestStatus in the tree query. SAP defaults it to R, so asking for
 # everything means asking twice.
 MODIFIABLE = "D"
@@ -269,6 +273,24 @@ def _new_payload(description: str, type_code: str, target: str, owner: str) -> s
     )
 
 
+async def set_task_type(session: AdtSession, task: str, task_type: str) -> None:
+    """Classify a task. Addressed by the task number, not by its request."""
+    await session.request(
+        "PUT",
+        f"{REQUESTS}/{task.upper()}",
+        content=(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" tm:number={quoteattr(task)}'
+            ' tm:useraction="changetasktype">'
+            f"<tm:task tm:type={quoteattr(task_type)}/>"
+            "</tm:root>"
+        ),
+        content_type="text/plain",
+        accept=ORGANIZER,
+        allow=(200, 201, 202, 204),
+    )
+
+
 async def create(
     session: AdtSession, description: str, *, type_code: str = WORKBENCH, target: str = ""
 ) -> Request:
@@ -297,6 +319,10 @@ async def create(
     if not number:
         raise AdtError("SAP created no request - the reply carried no number", body=reply.text)
     fields = made[0]
+    # The create reply names no task, so the request is read back to find it.
+    _, tasks = await read(session, number)
+    for task in tasks:
+        await set_task_type(session, task.number, TASK_TYPE.get(type_code, "S"))
     return Request(
         number=number,
         description=fields.get("desc", text),
@@ -304,15 +330,7 @@ async def create(
         type_code=fields.get("type", "") or type_code,
         released=False,
         target=fields.get("target", target),
-        tasks=tuple(
-            Task(
-                number=entry["number"],
-                owner=entry.get("owner", ""),
-                status=entry.get("status_text") or entry.get("status", ""),
-            )
-            for entry in (_attrs(fragment) for fragment in _TASK.findall(reply.text))
-            if entry.get("number")
-        ),
+        tasks=tuple(tasks),
     )
 
 
