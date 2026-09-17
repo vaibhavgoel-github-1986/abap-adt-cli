@@ -23,7 +23,24 @@ def test_single_part_types_default_to_main_source():
 
 
 def test_non_source_types_have_no_parts():
-    assert objects.lookup("SRVB/SVB").parts == ()
+    # VIEW answers with a SAP GUI shim, so there is nothing to fetch or write.
+    assert objects.lookup("VIEW/DV").parts == ()
+    assert not objects.lookup("VIEW/DV").is_source
+
+
+def test_xml_backed_types_have_an_object_part():
+    for code in ("DTEL/DE", "DOMA/DD", "MSAG/N", "SRVB/SVB"):
+        kind = objects.lookup(code)
+        assert kind.is_source, code
+        assert len(kind.parts) == 1, code
+        assert kind.parts[0].is_object, code
+        assert kind.main is None, code
+
+
+def test_object_part_uri_is_the_object_itself():
+    part = objects.lookup("MSAG/N").parts[0]
+    uri = "/sap/bc/adt/messageclass/zmsg_utils"
+    assert objects.part_uri(uri, part) == uri
 
 
 def test_longest_suffix_wins_when_resolving_a_file():

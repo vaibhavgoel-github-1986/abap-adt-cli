@@ -10,10 +10,54 @@ from typing import Annotated
 
 import typer
 
-from adt_cli import cts, repository, runtime, transports, ui
+from adt_cli import cts, objects, repository, runtime, transports, ui
 from adt_cli.commands.options import DestOpt, TraceOpt
 from adt_cli.errors import AbapCliError
 from adt_cli.workspace import Workspace
+
+
+@runtime.guard
+def types(
+    all_types: Annotated[
+        bool, typer.Option("--all", "-a", help="Also show types that are listed but never pulled.")
+    ] = False,
+) -> None:
+    """List the object types this CLI can pull and push.
+
+    Reads the same registry that pull and push use, so it always describes the
+    installed build rather than the documentation.
+
+    Types marked 'xml' are edited as the object's own document; the rest are
+    plain ABAP or DDL source. --all also lists the types SAP reports but ADT
+    serves no editable content for, which pull skips.
+    """
+    folder = ""
+    for entry in objects.supported():
+        if entry.folder != folder:
+            folder = entry.folder
+            ui.console.print(f"\n[bold]{folder}[/]")
+        suffixes = ", ".join(part.suffix for part in entry.parts)
+        shape = "  [dim]xml[/]" if entry.parts[0].is_object else ""
+        ui.console.print(f"  {entry.code:9} [dim]{suffixes}[/]{shape}")
+
+    ui.console.print(
+        f"\n[dim]{len(objects.supported())} type(s) pull fetches and push writes back.\n"
+        "Types marked xml are edited as the object's own document rather than\n"
+        "as source text; everything else is plain ABAP or DDL.[/]"
+    )
+
+    if not all_types:
+        ui.console.print("[dim]Run with --all to see what is deliberately skipped.[/]")
+        return
+    skipped = objects.listed_only()
+    ui.console.print(
+        f"\n[dim]{len(skipped)} type(s) SAP lists but ADT serves no editable content "
+        f"for, so pull skips them:[/]\n  [dim]{', '.join(e.code for e in skipped)}[/]"
+    )
+    ui.console.print(
+        "[dim]  Anything not named here - SEGW projects, SICF nodes, enterprise\n"
+        "  service proxies - is skipped as well.[/]"
+    )
 
 
 @runtime.guard
@@ -27,7 +71,17 @@ def delete(
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation.")] = False,
     trace: TraceOpt = False,
 ) -> None:
-    """Delete objects from SAP and from the workspace."""
+    """Delete objects from SAP and from the workspace.
+
+    The only irreversible thing this CLI does, so it asks first and will not
+    guess a transport. Only objects the workspace already tracks can be named,
+    which keeps a typo from deleting something unrelated.
+
+    Examples:
+
+      abap delete ZCL_THING --dry-run
+      abap delete ZCL_THING ZIF_THING --transport DHAK900123
+    """
     runtime.set_trace(trace)
     requested = cts.normalise_request(transport)
     root = runtime.resolve_root(dest, "")
@@ -122,7 +176,22 @@ def transport(
     system: Annotated[str, typer.Option("--system", "-s", help="Named system.")] = "",
     trace: TraceOpt = False,
 ) -> None:
-    """Inspect a transport, or add and remove objects in it."""
+    """Inspect a transport, or add and remove objects in it.
+
+    Objects live in tasks inside a request, so either number may be given and
+    the task you own is resolved for you.
+
+    Names accept three forms: a plain object name, CLASS=>METHOD for a single
+    method, or PGMID:TYPE:NAME when you need to be exact - which is what 'list'
+    prints, so its output can be fed straight back in.
+
+    Examples:
+
+      abap transport DHAK900123
+      abap transport DHAK900123 add ZCL_THING
+      abap transport DHAK900123 add ZCL_THING=>CONSTRUCTOR
+      abap transport DHAK900123 remove R3TR:CLAS:ZCL_THING
+    """
     runtime.set_trace(trace)
     number = cts.normalise_request(number)
     wanted = [name.strip().upper() for name in (names or []) if name.strip()]

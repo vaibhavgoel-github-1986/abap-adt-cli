@@ -93,8 +93,8 @@ class Fetched:
 
     @property
     def label(self) -> str:
-        """Object name, qualified by the part when it is not the main source."""
-        if self.part is None or self.part.is_main:
+        """Object name, qualified by the part only when that adds something."""
+        if self.part is None or self.part.is_main or self.part.is_object:
             return self.obj.name
         return f"{self.obj.name} ({self.part.path.rsplit('/', 1)[-1]})"
 
@@ -186,14 +186,15 @@ async def fetch_parts(
 
     async def one(obj: RepoObject, part: objects.Part | None) -> Fetched:
         uri = objects.part_uri(obj.uri, part) if part else obj.uri
-        accept = "text/plain" if part else "*/*"
+        # An object-resource part is typed XML, not plain source text.
+        accept = "text/plain" if part and not part.is_object else "*/*"
         async with gate:
             try:
                 reply = await session.get(uri, accept=accept)
             except AdtError as exc:
                 # 404 means absence, not failure: an include the class never
-                # created, or a type ADT lists but has no resource for.
-                if exc.status == 404 and (part is None or not part.is_main):
+                # created, or an object SAP lists but has no resource for.
+                if exc.status == 404:
                     result = Fetched(obj, "", part=part, absent=True)
                 else:
                     result = Fetched(obj, "", str(exc), part)
@@ -245,7 +246,10 @@ async def fetch_sources(
         if found.error
         or found.absent
         or (found.part is None and found.text.strip())
-        or (found.part is not None and (found.part.is_main or has_code(found.text)))
+        or (
+            found.part is not None
+            and (found.part.is_main or found.part.is_object or has_code(found.text))
+        )
     ]
 
 
@@ -253,6 +257,16 @@ async def read_source(session: AdtSession, obj: RepoObject) -> str:
     reply = await session.get(
         objects.source_uri(obj.uri, obj.kind), accept="text/plain"
     )
+    return normalise(reply.text)
+
+
+async def read_part(
+    session: AdtSession, obj: RepoObject, part: objects.Part | None = None
+) -> str:
+    """Current server copy of one editable text."""
+    uri = objects.part_uri(obj.uri, part) if part else objects.source_uri(obj.uri, obj.kind)
+    accept = "text/plain" if part and not part.is_object else "*/*"
+    reply = await session.get(uri, accept=accept)
     return normalise(reply.text)
 
 
@@ -274,6 +288,11 @@ async def write_source(
     if not obj.kind.writable:
         raise AdtError(f"{obj.name} is a {obj.type_code} object and has no writable source")
     target = objects.part_uri(obj.uri, part) if part else objects.source_uri(obj.uri, obj.kind)
+    content_type = "text/plain; charset=utf-8"
+    if part is not None and part.is_object:
+        # DDIC types are edited as their own typed XML, and the version of that
+        # type differs per release, so it is read back rather than assumed.
+        content_type = await object_content_type(session, obj.uri)
     async with session.locked(obj.uri) as lock:
         params = {"lockHandle": lock.handle}
         if transport:
@@ -282,6 +301,11 @@ async def write_source(
             "PUT",
             target,
             content=text.encode("utf-8"),
-            content_type="text/plain; charset=utf-8",
+            content_type=content_type,
             params=params,
         )
+
+
+async def object_content_type(session: AdtSession, object_uri: str) -> str:
+    reply = await session.get(object_uri, accept="*/*")
+    return reply.headers.get("content-type", "application/xml").split(";")[0]

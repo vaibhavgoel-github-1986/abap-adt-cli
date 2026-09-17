@@ -25,7 +25,21 @@ def status(
     ] = False,
     trace: TraceOpt = False,
 ) -> None:
-    """Show locally modified objects. Offline unless --remote is given."""
+    """Show locally modified objects. Offline unless --remote is given.
+
+    Compares the files on disk against the hashes recorded at pull time, so it
+    is instant and needs no password. Trailing newlines and line endings are
+    ignored, because SAP normalises those away when it stores a source.
+
+    With --remote it also fetches the server copy and reports objects that
+    changed there since your pull. Those are exactly what push will refuse, so
+    this is the cheapest way to find a conflict before attempting one.
+
+    Examples:
+
+      abap status            what did I change
+      abap status --remote   ...and what changed in SAP
+    """
     runtime.set_trace(trace)
     root = runtime.resolve_root(dest, package)
     space = runtime.load_workspace(root)
@@ -82,7 +96,15 @@ def diff(
     jobs: JobsOpt = 16,
     trace: TraceOpt = False,
 ) -> None:
-    """Show line differences between the server and your local files."""
+    """Show line differences between the server and your local files.
+
+    The manifest stores hashes rather than text, so this fetches the current
+    server copy of every tracked object - one request each, in parallel.
+
+    Each difference is attributed, which a plain diff cannot do: changed by
+    you, changed on the server, or both. The last is a conflict, and pushing it
+    would revert someone else's work.
+    """
     runtime.set_trace(trace)
     root = runtime.resolve_root(dest, package)
     space = runtime.load_workspace(root)

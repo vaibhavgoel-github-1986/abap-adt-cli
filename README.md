@@ -13,200 +13,28 @@ abap push --transport DHAK900123
 
 ## Why this exists
 
-ABAP source lives behind SE80 and Eclipse. Getting it in front of modern tooling
-— your editor, `grep`, `git diff`, an AI assistant — usually means copying it out
-by hand and pasting it back.
+ABAP source lives behind SE80 and Eclipse. Getting a whole package in front of
+modern tooling — your editor, `grep`, `git diff`, an AI assistant — usually means
+copying it out one object at a time.
 
-Copilot with an SAP MCP server understands a system well, but it is a poor way to
-*move* source. Every object read lands in the chat transcript, so a thirty-object
-package burns context before you change a line, and the model becomes the
-transport for your code.
+`abap cli` moves it in bulk, over HTTPS:
 
-Writing back is harder still. A correct write needs an ADT lock, a transport
-number, and proof that nobody touched the object since you read it. Miss one and
-you get a `Generated Request for Change Recording` nobody asked for, a
-whole-class lock that blocks a colleague, or a silent overwrite.
-
-`abap cli` does the transfer over HTTPS — no tokens, no paraphrasing in transit —
-and leaves the thinking to you and your tools.
-
-## Developer Workflow
-
-```
-┌──────────────┐
-│     SAP      │
-└──────┬───────┘
-       │
-       │  abap pull
-       ▼
-┌──────────────────────┐
-│  Local ABAP Files    │
-└─────────┬────────────┘
-          │
-          ▼
-┌──────────────────────┐
-│       VS Code        │
-│                      │
-│  Copilot / AI can:   │
-│  • inspect code      │
-│  • make changes      │
-│  • refactor          │
-│  • review changes    │
-└─────────┬────────────┘
-          │
-          ▼
-┌──────────────────────┐
-│   Developer Review   │
-│                      │
-│  abap diff           │
-│  abap status         │
-│  approve changes     │
-└─────────┬────────────┘
-          │
-          ▼
-     Push to SAP
-          │
-     ┌────┴───────────────┐
-     │                    │
-     ▼                    ▼
-┌──────────────┐   ┌────────────────────┐
-│   abap cli   │   │ SAP MCP / ADT /    │
-│              │   │ Existing SAP Tools │
-│ Source code  │   │                    │
-│ pull / push  │   │ Operations not yet │
-│ status/diff  │   │ supported by CLI   │
-│ activate     │   │                    │
-└──────┬───────┘   └─────────┬──────────┘
-       │                     │
-       └──────────┬──────────┘
-                  │
-                  ▼
-             ┌─────────┐
-             │   SAP   │
-             └─────────┘
-```
-
-### Reviewing before you push
-
-Two commands, two different questions.
-
-`abap status` tells you **which** objects you changed. It hashes every file
-against the manifest baseline recorded at pull time, so it needs no network and
-no git repository.
-
-`abap diff` shows **what** changed, line by line, against the copy currently in
-SAP — and, from the manifest baseline, **who** changed it:
-
-```console
-$ abap diff
-'-' is dha-110 as it stands now, '+' is your local copy - what push would make it
-trailing spaces shown as ·, tabs as →
-
-  R  src/zcds_i_cont_billsch.ddls.asddls  (changed on dha-110, not by you)
-  line 8
-   as select from zdt_cont_billsch
-
- {
--  key object_id,  //changes
-+  key object_id,
-   key number_int,
-  line 18
-       cycle_start_date,
--      cycle_end_date··
-+      cycle_end_date
- }
-
-1 object(s) differ from dha-110
-1 of them changed on dha-110 since your pull - pushing would overwrite that work, re-pull instead
-```
-
-Two readability details, because an ABAP diff is often whitespace: changed lines
-show trailing spaces as `·` and tabs as `→`, so an invisible edit is visible, and
-a file whose only difference is spacing is flagged `whitespace only`. Hunk
-positions are printed as plain `line 18` rather than `@@ -18,5 +18,5 @@`.
-
-The marker is the important part, because a diff on its own cannot tell you which
-side moved:
-
-| Marker | Meaning |
-| --- | --- |
-| `M` | you changed it; `+` is your edit, ready to push |
-| `R` | somebody changed it in SAP and you did not; `-` is their work, and pushing would wipe it |
-| `C` | both sides changed it |
-
-In the example above someone edited the view in SAP GUI. The `-` line is *their*
-change and the `+` line is your untouched copy, so pushing would silently revert
-them — hence the warning. Re-pull instead.
-
-The manifest stores hashes, not text, so `diff` fetches the server copy. That is
-the same request `status --remote` makes, kept rather than discarded, and costs
-one GET per tracked object.
-
-Git is still worth adding on top if you want local history and revert:
-
-```bash
-cd ~/Documents/ZGET_SUBS_API_V2
-git init && git add -A && git commit -m "baseline: pulled from dha-110"
-```
-
-That buys `git diff` offline, plus `git checkout -- <file>` to throw a change
-away. Entirely optional — `abap diff`, `abap status` and `abap push --dry-run`
-cover review on their own.
-
-### Why hybrid push?
-
-For normal source-code changes:
-
-```bash
-abap status
-abap status --remote
-abap diff
-abap push --transport DHAK900123 --activate
-```
-
-But some SAP operations may still require **MCP, ADT/Eclipse, SAP GUI, or other
-SAP tooling**, for example:
-
-- create a transport
-- create/delete certain SAP objects
-- maintain TVARVC entries
-- perform SCC1N
-- work with object types not yet supported by `abap cli`
-
-So the intended model is:
-
-```
-Pull      → abap cli
-Develop   → Local files + VS Code + AI
-Review    → Developer
-Push      → abap cli where supported
-            +
-            SAP MCP / SAP tools where required
-```
-
-> **`abap cli` is not trying to replace SAP MCP or ADT.**
-> It removes the slow, token-heavy source transfer from the AI workflow and gives
-> developers fast local ABAP files to work with.
-
-## What you get
-
-**Correct transport entries.** Editing one method records exactly one
-`LIMU METH` entry, the same as Eclipse. The class is not locked as a whole, so a
-colleague can work on a different method in a different transport, and importing
-your transport will not revert theirs.
-
-```
-DHAK907236   LIMU   METH   ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
-```
-
-**No silent overwrites.** Push refuses to clobber work that appeared on the
-server after your pull, and refuses to auto-generate a transport behind your
-back. See [Guard rails](#guard-rails).
-
-**Speed.** Enumeration is a single request; every source fetch runs in parallel.
-A 30-object package lands in about 2.3 seconds.
-
-**Nothing installed in SAP.** ADT is already there.
+- **Pull a package in one command.** Thousands of objects fetched in parallel
+  and written as ordinary files, including the parts SE80 hides — a class
+  arrives with its local classes and test classes as separate, editable files.
+- **See what changed before you ship.** `abap status` says which objects you
+  touched; `abap diff` says what changed, line by line, and whether it was you
+  or somebody working in SAP.
+- **Push and activate in bulk.** Every edited object goes in one run and they
+  activate together, so you never work out the right order for a CDS view, its
+  behavior definition and the class behind it.
+- **Correct transport entries.** Editing one method records one `LIMU METH`
+  entry, not a lock on the whole class, so a colleague can work on the next
+  method in their own transport.
+- **Your source never passes through a language model.** The transfer is plain
+  HTTPS between your machine and SAP. An AI assistant reads the files from
+  disk, so a large package costs no context window and nothing is paraphrased
+  in transit.
 
 ## Requirements
 
@@ -260,25 +88,34 @@ cd ~/Documents/ZGET_SUBS_API_V2
 
 ```console
 connected to dha-110, listing ZGET_SUBS_API_V2...
-pulling 30 objects ━━━━━━━━━━━━━━━━━━━━ 30/30 0:00:02
-pulled ZGET_SUBS_API_V2 from dha-110 - 30 objects, 204,345 bytes in 2.3s
+pulling 30 objects ━━━━━━━━━━━━━━━━━━━━ 74/74 0:00:02
+pulled ZGET_SUBS_API_V2 from dha-110 - 30 objects in 38 files, 204,345 bytes in 2.3s
 ```
 
-You now have ordinary files:
+The bar counts *requests*, not objects, because one object can be several
+editable texts — a class is up to five. You now have ordinary files, laid out the
+way SE80 shows them, with every file of an object in one folder:
 
 ```
-src/zcl_subs_query_provider.clas.abap
-src/zcds_i_cont_billsch.ddls.asddls
-src/zsd_get_subs_v2.srvd.srvdsrv
+Class Library/Classes/ZCL_SUBS_QUERY_PROVIDER/
+  zcl_subs_query_provider.clas.abap
+  zcl_subs_query_provider.clas.testclasses.abap
+Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/
+  zcds_i_cont_billsch.ddls.asddls
+Business Services/Service Definitions/ZSD_GET_SUBS_V2/
+  zsd_get_subs_v2.srvd.srvdsrv
 .adt/manifest.json        # what was pulled, from where, and its hashes
 ```
+
+Pass `--flat` if you would rather have every file in one `src/` folder. See
+[Layout](#layout).
 
 Edit them however you like, then see what you touched — offline and instant:
 
 ```console
 $ abap status
 ZGET_SUBS_API_V2 from dha-110, pulled 2026-09-14T17:37:49
-  M  src/zcds_i_cont_billsch.ddls.asddls
+  M  Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/zcds_i_cont_billsch.ddls.asddls
 
 1 modified, 0 deleted
 ```
@@ -292,8 +129,8 @@ abap push --transport DHAK907258
 ```
 
 ```console
-  M  src/zcds_i_cont_billsch.ddls.asddls
-  pushed ZCDS_I_CONT_BILLSCH
+  M  Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/zcds_i_cont_billsch.ddls.asddls
+  pushed Core Data Services/Data Definitions/ZCDS_I_CONT_BILLSCH/zcds_i_cont_billsch.ddls.asddls
 
 1 object(s) pushed
 ```
@@ -324,31 +161,94 @@ abap --trace push --transport DHAK900123
 
 | Command | Purpose |
 | --- | --- |
-| `abap init` / `login` / `logout` / `systems` | connection profiles and credentials |
-| `abap ping` | check the endpoint is reachable |
-| `abap pull [PACKAGE]` | download a package, in parallel |
-| `abap pull [PACKAGE] --match / --type / --user` | download only part of one |
-| `abap status` | locally modified objects, offline |
-| `abap status --remote` | also report what changed on the server |
-| `abap diff` | line-level differences against the server copy |
-| `abap push` | upload changed objects |
-| `abap push --activate` | ...and activate just those objects afterwards |
-| `abap delete NAME...` | delete objects from SAP and the workspace |
-| `abap transport TR list` | what a request contains |
-| `abap transport TR add NAME...` | add objects, whole or method-level |
-| `abap transport TR remove NAME...` | remove objects from a request |
-| `abap version` | which version is installed, and how |
-| `abap update` | install the newest published release |
+| [`abap init` / `login` / `logout` / `systems`](#abap-init-login-logout-systems-ping) | connection profiles and credentials |
+| [`abap ping`](#abap-init-login-logout-systems-ping) | check the endpoint is reachable |
+| [`abap types`](#abap-types) | object types that can be pulled and pushed |
+| [`abap pull [PACKAGE]`](#abap-pull) | download a package, in parallel |
+| [`abap pull [PACKAGE] --match / --type / --user`](#abap-pull) | download only part of one |
+| [`abap status`](#abap-status) | locally modified objects, offline |
+| [`abap status --remote`](#abap-status) | also report what changed on the server |
+| [`abap diff`](#abap-diff) | line-level differences against the server copy |
+| [`abap push`](#abap-push) | upload changed objects |
+| [`abap push --activate`](#abap-push) | ...and activate just those objects afterwards |
+| [`abap delete NAME...`](#abap-delete) | delete objects from SAP and the workspace |
+| [`abap transport TR list`](#abap-transport) | what a request contains |
+| [`abap transport TR add NAME...`](#abap-transport) | add objects, whole or method-level |
+| [`abap transport TR remove NAME...`](#abap-transport) | remove objects from a request |
+| [`abap version`](#abap-version-abap-update) | which version is installed, and how |
+| [`abap update`](#abap-version-abap-update) | install the newest published release |
 
 Every command that talks to SAP also takes `--system` / `-s` and `--trace`.
+
+Every command also carries its own reference: `abap <command> --help` prints what
+it does, the guard rails it applies and worked examples.
+
+### What each command is for
+
+#### `abap init`, `login`, `logout`, `systems`, `ping`
+
+Connection profiles and credentials. Passwords go to the OS keychain, never to a
+file. `ping` checks the endpoint answers before you wait on a long pull.
+Full detail: [Systems and credentials](#systems-and-credentials).
+
+#### `abap types`
+
+The object types the installed build can pull and push, read straight from the
+registry the code uses. `--all` also lists what is skipped and why. Start here if
+you are unsure whether a package is fully covered.
+Full detail: [Object types](#object-types).
+
+#### `abap pull`
+
+Downloads a package into a folder and writes a manifest describing what was
+fetched. Run it with no arguments inside an existing workspace to refresh in
+place, keeping the same system, layout and any `--match` / `--type` / `--user`
+narrowing. Full detail: [Pulling](#pulling).
+
+#### `abap status`
+
+Which objects you changed, compared against the hashes taken at pull time.
+Offline and instant. `--remote` also reports what changed *in SAP* since your
+pull, which is exactly what push will refuse.
+Full detail: [Reviewing before you push](#reviewing-before-you-push).
+
+#### `abap diff`
+
+What changed, line by line, against the copy in SAP, and whether the change came
+from you, from the server, or both. The third case is a conflict.
+Full detail: [Reviewing before you push](#reviewing-before-you-push).
+
+#### `abap push`
+
+Sends every changed file back, each to its own ADT endpoint, so a one-method edit
+stays a one-method transport entry. Add `--activate` to activate the whole batch
+in a single run. Always safe to rehearse with `--dry-run`.
+Full detail: [Pushing](#pushing) and [Activating](#activating).
+
+#### `abap delete`
+
+Removes objects from SAP and from the workspace. The one irreversible command, so
+it confirms first and only accepts objects the workspace already tracks.
+Full detail: [Deleting](#deleting).
+
+#### `abap transport`
+
+Inspect a request, or move objects in and out of it. `list` prints the exact
+`PGMID:TYPE:NAME` form that `add` and `remove` accept.
+Full detail: [Transports](#transports).
+
+#### `abap version`, `abap update`
+
+Which build is installed and how it was installed, and upgrading to the newest
+published release. Full detail: [Versions and updating](#versions-and-updating).
 
 ## Pulling
 
 A *workspace* is any folder containing `.adt/manifest.json`. The manifest records
-the package, the system, the layout, and one entry per object — its name, ADT
-type, ADT URI and the SHA-256 of exactly what the server sent. Everything
-`status` and `push` do later is derived from it, which is why no git repository
-is required.
+the package, the system, the layout, and one entry per file — the object's name,
+ADT type and ADT URI, which editable text of that object the file holds, and the
+SHA-256 of exactly what the server sent. Everything `status` and `push` do later
+is derived from it, which is why no git repository is required.
 
 Where the files land depends on whether you pass `--dest` and whether you are
 already standing in a workspace:
@@ -384,13 +284,68 @@ overwriting your work. `--force` discards local changes and re-downloads.
 | `--match` / `-m` | object name pattern, e.g. `'ZCL_SUBS*'` |
 | `--type` / `-t` | comma-separated ADT types, e.g. `'CLAS,DDLS'` |
 | `--user` / `-u` | object owner; defaults to you for `$` packages, `'*'` means everyone |
-| `--se80` / `--flat` | SE80 object tree, or flat `src/` (default); a refresh keeps whatever the manifest recorded |
+| `--se80` / `--flat` | SE80 object tree (default), or one flat `src/` folder; a refresh keeps whatever the manifest recorded |
 | `--jobs` / `-j` | parallel requests, default 16 |
 | `--force` / `-f` | discard local modifications and overwrite |
 | `--system` / `-s` | pull from a system other than the default, or the one recorded in the manifest |
 
 Objects that fail to download are reported individually and do not abort the
 pull; everything else still lands.
+
+### Layout
+
+The default is an SE80-style tree. Each object gets a folder inside its type
+folder, and everything belonging to that object lives in it:
+
+```
+Class Library/Classes/ZCL_TSTMP_UTILITIES/
+  zcl_tstmp_utilities.clas.abap
+  zcl_tstmp_utilities.clas.locals_imp.abap
+  zcl_tstmp_utilities.clas.testclasses.abap
+Function Groups/ZFG_SUBS/
+  zfg_subs.fugr.abap                 # the group's main program
+  lzfg_substop.fugr.abap             # its includes
+  z_subs_read.fugr.abap              # and its function modules
+```
+
+`--flat` puts every file in a single `src/` folder instead, which is easier to
+`grep` and keeps paths short. Both layouts hold the same files, and the choice is
+recorded in the manifest — a later bare `abap pull` refresh keeps whatever the
+workspace was pulled with, so an existing workspace never reshuffles underneath
+you.
+
+Switching layout on an existing workspace by passing `--se80` or `--flat`
+explicitly rewrites the manifest and writes the files at their new paths, but
+does **not** remove the files at the old ones. Delete the folder and pull again
+for a clean switch.
+
+### One object, several files
+
+An object is not always one file. A class keeps its local definitions, local
+implementations, macros and test classes in separate ADT includes, and SAP edits,
+locks and transports each of them on its own. Pull brings down all five:
+
+| File | ADT include |
+| --- | --- |
+| `zcl_x.clas.abap` | the class itself |
+| `zcl_x.clas.locals_def.abap` | local type and class definitions |
+| `zcl_x.clas.locals_imp.abap` | local class implementations |
+| `zcl_x.clas.macros.abap` | macros |
+| `zcl_x.clas.testclasses.abap` | ABAP Unit test classes |
+
+Includes the class never used are skipped rather than written as empty files:
+SAP answers 404 for one that was never created, and returns nothing but a
+commented banner for one that exists and is empty. Neither becomes a file, so a
+class with no local helpers still arrives as a single `.clas.abap`.
+
+Push works the same way in reverse. Editing only `zcl_x.clas.testclasses.abap`
+writes only that include, so the transport records the test include and nothing
+else. A class edited across three files is still activated once.
+
+Function groups are expanded on pull. A package listing only names the group, so
+the CLI resolves its includes and function modules through the same repository
+node structure Eclipse uses — without that step a function module could never be
+pulled or pushed at all. They are filed under the group, the way SE80 shows them.
 
 ### Local objects: `$TMP`
 
@@ -404,7 +359,7 @@ authenticated as:
 ```console
 $ abap pull '$TMP' --dest ~/Documents/my-local
 connected to dha-110, listing $TMP owned by VAIBHAGO...
-pulled $TMP from dha-110 - 69 objects, 273,395 bytes in 5.8s
+pulled $TMP from dha-110 - 69 objects in 84 files, 273,395 bytes in 5.8s
 ```
 
 Quote it. `$TMP` is a variable reference to your shell, and unquoted it expands
@@ -423,12 +378,12 @@ abap pull '$TMP' --user ANOTHER_DEV --dest ~/Documents/ANOTHER_DEV
 abap pull '$TMP' --user '*' --match 'ZCL_A*'     # everyone, narrowed by name
 ```
 
-Add `--se80` to get the same grouped tree Eclipse shows under a user's `$TMP`,
+The default SE80 tree is the same grouping Eclipse shows under a user's `$TMP`,
 which makes a folder per developer easy to browse side by side:
 
 ```bash
-abap pull '$TMP' --se80 --dest ~/Documents/VAIBHAGO
-abap pull '$TMP' --se80 --user ANOTHER_DEV --dest ~/Documents/ANOTHER_DEV
+abap pull '$TMP' --dest ~/Documents/VAIBHAGO
+abap pull '$TMP' --user ANOTHER_DEV --dest ~/Documents/ANOTHER_DEV
 ```
 
 ```
@@ -438,10 +393,12 @@ VAIBHAGO/
   Core Data Services/{Data Definitions,Behavior,...}        15
   Dictionary/{Database Tables,Views}                         4
   Enhancements/                                              1
-  Function Groups/Function Modules                           1
+  Function Groups/                                           1
   Message Classes/                                           1
   Programs/                                                 21
 ```
+
+Counts are objects; each is a folder of one or more files.
 
 Pushing back to `$TMP` needs no transport — local packages are never
 transported. See [Guard rails](#guard-rails).
@@ -479,13 +436,13 @@ the first five happen before any network call:
    aborts the whole push rather than pushing the rest silently.
 5. **A transport is required** for transportable packages. See
    [Guard rails](#guard-rails).
-6. **Drift check** — one parallel read per modified object, comparing the server
-   copy against the baseline. Any conflict aborts before a single byte is
-   written.
-7. **Write loop** — for each object, serially: `LOCK`, `PUT` the source with
-   `corrNr`, `UNLOCK`. The local baseline is re-hashed and the manifest saved
-   after each object, so a failure halfway through does not make already-pushed
-   objects look unpushed. Re-running pushes only what is left.
+6. **Drift check** — one parallel read per modified file, comparing the server
+   copy of that exact include against the baseline. Any conflict aborts before a
+   single byte is written.
+7. **Write loop** — for each file, serially: `LOCK` the object, `PUT` that
+   include with `corrNr`, `UNLOCK`. The local baseline is re-hashed and the
+   manifest saved after each file, so a failure halfway through does not make
+   already-pushed work look unpushed. Re-running pushes only what is left.
 
 | Variation | What it does |
 | --- | --- |
@@ -503,9 +460,10 @@ Pushed objects stay **inactive** until something activates them. Add
 
 ### New objects
 
-A file that the manifest has never seen is a new object. Drop it in `src/` with
-the right name and extension and push creates it in SAP first, then writes the
-source into it — the same two steps Eclipse performs when you add a class:
+A file that the manifest has never seen is a new object. Drop it anywhere in the
+workspace with the right name and extension — the folder it sits in does not
+matter, only the file name does — and push creates it in SAP first, then writes
+the source into it, the same two steps Eclipse performs when you add a class:
 
 ```console
 $ abap status
@@ -527,7 +485,9 @@ activated 2 object(s) on dha-110
 ```
 
 The object name comes from the filename and the type from the extension, so
-`zcl_thing.clas.abap` becomes class `ZCL_THING`. It lands in the workspace's
+`zcl_thing.clas.abap` becomes class `ZCL_THING`. Part suffixes are understood
+too: `zcl_thing.clas.testclasses.abap` is the test include of `ZCL_THING`, not an
+object called `ZCL_THING_CLAS_TESTCLASSES`. The object lands in the workspace's
 package, under the transport push resolved. Descriptions are taken from
 `@EndUserText.label` where the source has one, and default to the object name
 otherwise.
@@ -536,6 +496,11 @@ Creatable types are classes, interfaces, programs, CDS data definitions,
 metadata extensions, access controls and service definitions. A new file of any
 other type is refused by name rather than ignored — create it in Eclipse/ADT
 once, then re-pull.
+
+New **function group** objects are the exception worth knowing: four ADT types
+share the `.fugr.abap` extension, so a new file with that extension is read as a
+function group. A new function module cannot be created by dropping a file —
+create it in Eclipse/ADT, then re-pull and edit it here.
 
 Files in dot-directories are never considered, so `.git` and `.adt` stay out of
 it. Deleting a file still does nothing: push never deletes objects in SAP.
@@ -584,6 +549,177 @@ error 1 activation error(s) - the objects stay inactive until they are fixed
 The source is still in SAP and still in the transport at that point; only the
 active version is unchanged. Fix the file locally and push again. Warnings are
 printed but do not fail the run.
+
+## Deleting
+
+Deletion is the one irreversible thing here, so it is deliberately awkward: it
+takes object *names* rather than file paths, only accepts objects the workspace
+already tracks, and asks before it acts.
+
+```console
+$ abap delete ZCL_CLI_TR_DEMO
+  D  ZCL_CLI_TR_DEMO  (src/zcl_cli_tr_demo.clas.abap)
+
+This deletes 1 object(s) from dha-110. Deleted objects cannot be restored by this CLI.
+Continue? [y/N]: y
+using DHAK907262 (VAIBHAGO, 'Testing 2') - it already holds these objects
+  recording under your task DHAK907263
+  deleted ZCL_CLI_TR_DEMO
+
+1 object(s) deleted
+```
+
+`--dry-run` lists and stops; `--yes` skips the prompt for scripts. The same
+transport rules as push apply, because a deletion has to be recorded somewhere
+before it can reach the next system — see [Guard rails](#guard-rails). On
+success the local file and its manifest entry go too, so `status` stays clean.
+
+A name the workspace does not track is refused rather than guessed at:
+
+```console
+$ abap delete ZCL_NOT_HERE
+  !  ZCL_NOT_HERE is not in this workspace
+error only objects tracked by the workspace can be deleted - re-pull first
+```
+
+## Transports
+
+`abap transport` inspects a request, and adds or removes objects in it:
+
+```console
+$ abap transport DHAK907262 list
+task DHAK907263  VAIBHAGO  Modifiable
+  locked  R3TR CLAS ZCL_SUBS_QUERY_PROVIDER
+  locked  R3TR DDLS ZCE_HEADER
+
+2 object(s) in DHAK907262
+
+$ abap transport DHAK907274 add ZCL_TSTMP_UTILITIES
+  +  R3TR CLAS ZCL_TSTMP_UTILITIES
+
+1 object(s) in DHAK907274
+```
+
+Objects live in *tasks*, not requests, so a request number is resolved to the
+task you own before anything is written.
+
+### Naming what to add
+
+Three forms, because not every entry is a whole object:
+
+| Form | Records | Example |
+| --- | --- | --- |
+| `NAME` | `R3TR` + the type from the workspace manifest | `ZCL_TSTMP_UTILITIES` |
+| `CLASS=>METHOD` | `LIMU METH` — one method on its own | `ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET` |
+| `PGMID:TYPE:NAME` | exactly what you type | `R3TR:TABL:ZMY_TABLE` |
+
+The method form is the one that matters for shared classes, and produces the
+same entry SAP writes when you edit a single method in Eclipse:
+
+```console
+$ abap transport DHAK907275 add 'ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET'
+  +  LIMU METH ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
+
+1 object(s) in DHAK907275
+```
+
+That spacing is not cosmetic: SAP stores a `LIMU METH` key as the class name
+padded to 30 characters followed by the method, so the CLI builds it that way.
+Interface implementations work through the same form —
+`ZCL_THING=>ZIF_THING~DO_IT`.
+
+Quote the argument. `=>` means nothing to zsh or bash, but shells differ and a
+stray `>` would redirect to a file.
+
+The plain `NAME` form needs the object in the workspace, since that is where its
+type comes from. `PGMID:TYPE:NAME` is the escape hatch when it is not, or when
+you want an entry the CLI would never infer. Types for `remove` come from the
+request itself, so an entry can still be named after its object is gone.
+
+**Removing works, and is addressed by position.** SAP identifies an entry by its
+position in the request, not by name, so the current contents are read
+immediately before the write — positions shift as entries go:
+
+```console
+$ abap transport DHAK907262 remove ZCL_PUSH_NEW_TEST ZCE_PUSH_NEW_TEST
+  -  R3TR CLAS ZCL_PUSH_NEW_TEST removed
+  -  R3TR DDLS ZCE_PUSH_NEW_TEST removed
+
+2 object(s) removed from DHAK907262
+```
+
+The result is read back afterwards rather than trusting the `200`: omit the
+position and SAP answers `200` and does nothing at all, so anything still in the
+request is reported as a failure instead of a success.
+
+Removing an object's only entry releases its lock, which is how you hand a class
+back without releasing the whole request.
+
+## Object types
+
+`abap` pulls exactly what it can push back. A type earns its place by having
+something ADT will accept a write for; anything else is skipped rather than
+downloaded as read-only metadata you would only discover was read-only when the
+push refused it.
+
+To see the current list on your own install:
+
+```console
+abap types          # types that are pulled and pushed
+abap types --all    # plus the ones deliberately skipped
+```
+
+```console
+Class Library/Classes
+  CLAS/OC   .clas.abap, .clas.locals_def.abap, .clas.locals_imp.abap,
+            .clas.macros.abap, .clas.testclasses.abap
+
+Dictionary/Data Elements
+  DTEL/DE   .dtel.xml  xml
+
+Function Groups
+  FUGR/F    .fugr.abap
+  FUGR/FF   .fugr.abap
+  FUGR/I    .fugr.abap
+```
+
+Two shapes are covered.
+
+**Source objects** are plain text at a source endpoint: classes (with their
+local definitions, local implementations, macros and test classes), interfaces,
+programs, includes, function groups, function modules and their includes, type
+groups, transformations, CDS data definitions, metadata extensions, annotation
+definitions, access controls, behavior definitions, service definitions,
+database tables and structures.
+
+**Dictionary, text and service objects** have no source endpoint at all — they
+are edited as the object's own XML document: data elements, domains, table
+types, lock objects, message classes and service bindings. A message class
+carries every message number and text, and a service binding carries its
+contract and published state, so those are editable too. SAP stamps `changedAt`
+when it stores one, so push re-reads the object afterwards and takes the
+server's copy as the new baseline; without that every pushed object would look
+changed for ever after.
+
+Skipped, because ADT answers with a SAP GUI shim rather than a real resource:
+DDIC views and BSP applications. Enhancement implementations are skipped as
+well — they do have a resource, but SAP fails to serialise a good share of them
+with a 500. So are packages and authorization defaults, types the registry has
+never heard of — SEGW projects, SICF nodes, transactions — and objects another
+SAP service owns, such as enterprise service proxies. All of them are counted in
+one line rather than producing a 404 each:
+
+```console
+pulled ZS4INTCPQ from dha-110 - 3894 objects in 3974 files in 97.6s
+1664 object(s) have no editable content in ADT and were skipped
+```
+
+Objects that fail for any other reason are reported one per line, and the rest of
+the pull still completes.
+
+Adding a type is one line in `objects.py` — a `Part` names the file suffix and
+the URI segment that serves it. An empty segment means the object resource
+itself, which is how the XML-backed types are written.
 
 ## Guard rails
 
@@ -722,6 +858,180 @@ sending it.
 
 This costs one read round trip per modified object before the write; `--force`
 skips the check.
+
+## Developer Workflow
+
+```
+┌──────────────┐
+│     SAP      │
+└──────┬───────┘
+       │
+       │  abap pull
+       ▼
+┌──────────────────────┐
+│  Local ABAP Files    │
+└─────────┬────────────┘
+          │
+          ▼
+┌──────────────────────┐
+│       VS Code        │
+│                      │
+│  Copilot / AI can:   │
+│  • inspect code      │
+│  • make changes      │
+│  • refactor          │
+│  • review changes    │
+└─────────┬────────────┘
+          │
+          ▼
+┌──────────────────────┐
+│   Developer Review   │
+│                      │
+│  abap diff           │
+│  abap status         │
+│  approve changes     │
+└─────────┬────────────┘
+          │
+          ▼
+     Push to SAP
+          │
+     ┌────┴───────────────┐
+     │                    │
+     ▼                    ▼
+┌──────────────┐   ┌────────────────────┐
+│   abap cli   │   │ SAP MCP / ADT /    │
+│              │   │ Existing SAP Tools │
+│ Source code  │   │                    │
+│ pull / push  │   │ Operations not yet │
+│ status/diff  │   │ supported by CLI   │
+│ activate     │   │                    │
+└──────┬───────┘   └─────────┬──────────┘
+       │                     │
+       └──────────┬──────────┘
+                  │
+                  ▼
+             ┌─────────┐
+             │   SAP   │
+             └─────────┘
+```
+
+### Reviewing before you push
+
+Two commands, two different questions.
+
+`abap status` tells you **which** objects you changed. It hashes every file
+against the manifest baseline recorded at pull time, so it needs no network and
+no git repository.
+
+`abap diff` shows **what** changed, line by line, against the copy currently in
+SAP — and, from the manifest baseline, **who** changed it:
+
+> Console samples from here on use short `src/…` paths, the [`--flat`
+> layout](#layout), so lines fit. The default SE80 tree prints the same files at
+> longer paths.
+
+```console
+$ abap diff
+'-' is dha-110 as it stands now, '+' is your local copy - what push would make it
+trailing spaces shown as ·, tabs as →
+
+  R  src/zcds_i_cont_billsch.ddls.asddls  (changed on dha-110, not by you)
+  line 8
+   as select from zdt_cont_billsch
+
+ {
+-  key object_id,  //changes
++  key object_id,
+   key number_int,
+  line 18
+       cycle_start_date,
+-      cycle_end_date··
++      cycle_end_date
+ }
+
+1 object(s) differ from dha-110
+1 of them changed on dha-110 since your pull - pushing would overwrite that work, re-pull instead
+```
+
+Two readability details, because an ABAP diff is often whitespace: changed lines
+show trailing spaces as `·` and tabs as `→`, so an invisible edit is visible, and
+a file whose only difference is spacing is flagged `whitespace only`. Hunk
+positions are printed as plain `line 18` rather than `@@ -18,5 +18,5 @@`.
+
+The marker is the important part, because a diff on its own cannot tell you which
+side moved:
+
+| Marker | Meaning |
+| --- | --- |
+| `M` | you changed it; `+` is your edit, ready to push |
+| `R` | somebody changed it in SAP and you did not; `-` is their work, and pushing would wipe it |
+| `C` | both sides changed it |
+
+In the example above someone edited the view in SAP GUI. The `-` line is *their*
+change and the `+` line is your untouched copy, so pushing would silently revert
+them — hence the warning. Re-pull instead.
+
+The manifest stores hashes, not text, so `diff` fetches the server copy. That is
+the same request `status --remote` makes, kept rather than discarded, and costs
+one GET per tracked object.
+
+Git is still worth adding on top if you want local history and revert:
+
+```bash
+cd ~/Documents/ZGET_SUBS_API_V2
+git init && git add -A && git commit -m "baseline: pulled from dha-110"
+```
+
+That buys `git diff` offline, plus `git checkout -- <file>` to throw a change
+away. Entirely optional — `abap diff`, `abap status` and `abap push --dry-run`
+cover review on their own.
+
+### What still needs SAP tooling
+
+`abap` covers the develop-review-ship loop for the object types in
+[Object types](#object-types). A few things deliberately live elsewhere, because
+they are one-off setup steps rather than part of the edit cycle:
+
+| Task | Where |
+| --- | --- |
+| create a transport request | Eclipse/ADT, SE09, or an MCP server |
+| release a transport | SE09/SE10 |
+| object types outside the registry | Eclipse/ADT or SAP GUI |
+| SEGW projects, SICF nodes, DDIC views | SAP GUI — no ADT editor exists |
+| TVARVC entries, client copies | SAP GUI or an MCP server |
+
+Everything else — pulling, editing, diffing, pushing, activating, adding to and
+removing from a transport, deleting objects — is `abap`.
+
+Run `abap types` to see exactly which object types the installed build handles;
+it reads the same registry the pull and push use, so it cannot drift from the
+code.
+
+## What you get
+
+**Correct transport entries.** Editing one method records exactly one
+`LIMU METH` entry, the same as Eclipse. The class is not locked as a whole, so a
+colleague can work on a different method in a different transport, and importing
+your transport will not revert theirs.
+
+```
+DHAK907236   LIMU   METH   ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
+```
+
+**The whole object, not just its main source.** A class comes down as its own
+source plus its local definitions, local implementations, macros and test
+classes, each of them a file you can edit and push on its own. Function groups
+are expanded into their includes and function modules. See
+[One object, several files](#one-object-several-files).
+
+**No silent overwrites.** Push refuses to clobber work that appeared on the
+server after your pull, and refuses to auto-generate a transport behind your
+back. See [Guard rails](#guard-rails).
+
+**Speed.** Enumeration is a single request; every source fetch runs in parallel.
+A 30-object package lands in about 2.3 seconds.
+
+**Nothing installed in SAP.** ADT is already there.
 
 ## Systems and credentials
 
@@ -871,22 +1181,30 @@ abap pull ZGET_SUBS_API_V2
 
 ```
 abap pull   →  POST /repository/informationsystem/virtualfolders/contents   (1 request)
-            →  GET  <object>/source/main                                    (parallel)
+            →  POST /repository/nodestructure                   (function groups only)
+            →  GET  <object><part>                              (parallel, one per part)
 
-abap diff   →  GET  <object>/source/main                 (parallel, text kept)
+abap diff   →  GET  <object><part>                       (parallel, text kept)
 
-abap push   →  GET  <object>/source/main                 (drift check, parallel)
+abap push   →  GET  <object><part>                       (drift check, parallel)
             →  POST /cts/transportchecks                 (which request owns it)
             →  POST <object>?_action=LOCK                (stateful, serialised)
-            →  PUT  <object>/source/main?lockHandle=...&corrNr=...
+            →  PUT  <object><part>?lockHandle=...&corrNr=...
             →  POST <object>?_action=UNLOCK
             →  POST /activation                          (--activate, one batch)
 ```
 
+`<part>` is `/source/main` for most objects, and one of `/includes/definitions`,
+`/includes/implementations`, `/includes/macros` or `/includes/testclasses` for
+the other texts a class owns. The lock is always taken on the object; only the
+`PUT` targets an individual include.
+
 Reads are stateless so they parallelise. Locks are session-bound, so writes are
 serialised and the session always returns to stateless afterwards, releasing any
 server-side enqueue. Activation comes last and in a single call, because SAP
-refuses to activate a locked object and resolves dependency order itself.
+refuses to activate a locked object and resolves dependency order itself — and an
+object edited across several of its includes is activated once, not once per
+file.
 
 Transport granularity is not something this CLI implements — it falls out of
 using the same API Eclipse does. SAP decides which includes actually changed and
@@ -894,21 +1212,6 @@ records those.
 
 ADT serves CRLF; files are stored with LF locally so a pull/push round trip does
 not make every object look modified.
-
-## Object types
-
-Source-based objects are pulled as text: classes, interfaces, programs, includes,
-function modules, CDS data definitions, metadata extensions, access controls,
-behavior definitions, service definitions.
-
-Non-source objects — service bindings, message classes, DDIC views, enhancement
-implementations, packages — are pulled as their ADT metadata XML instead of
-source text, and can't be pushed back. Adding a type is one line in
-`objects.py`.
-
-Anything still unmapped lands in `Other/` as `.txt`. A handful of generated or
-obsolete objects have no readable ADT endpoint at all; those are reported one
-per line and skipped, and the rest of the pull still completes.
 
 ## Versions and updating
 
@@ -953,8 +1256,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 0.2.0"
-git tag v0.2.0
+git commit -am "release 1.0.0"
+git tag v1.0.0
 git push && git push --tags
 ```
 
@@ -971,112 +1274,16 @@ would fail if the objects were activated one at a time.
 
 Not yet implemented: where-used, syntax check, unit test runs, and creating a
 transport request — for those, reach for ADT/Eclipse or an MCP server. See
-[Why hybrid push?](#why-hybrid-push).
+[What still needs SAP tooling](#what-still-needs-sap-tooling).
 
-## Deleting
+### Known rough edges
 
-Deletion is the one irreversible thing here, so it is deliberately awkward: it
-takes object *names* rather than file paths, only accepts objects the workspace
-already tracks, and asks before it acts.
-
-```console
-$ abap delete ZCL_CLI_TR_DEMO
-  D  ZCL_CLI_TR_DEMO  (src/zcl_cli_tr_demo.clas.abap)
-
-This deletes 1 object(s) from dha-110. Deleted objects cannot be restored by this CLI.
-Continue? [y/N]: y
-using DHAK907262 (VAIBHAGO, 'Testing 2') - it already holds these objects
-  recording under your task DHAK907263
-  deleted ZCL_CLI_TR_DEMO
-
-1 object(s) deleted
-```
-
-`--dry-run` lists and stops; `--yes` skips the prompt for scripts. The same
-transport rules as push apply, because a deletion has to be recorded somewhere
-before it can reach the next system — see [Guard rails](#guard-rails). On
-success the local file and its manifest entry go too, so `status` stays clean.
-
-A name the workspace does not track is refused rather than guessed at:
-
-```console
-$ abap delete ZCL_NOT_HERE
-  !  ZCL_NOT_HERE is not in this workspace
-error only objects tracked by the workspace can be deleted - re-pull first
-```
-
-## Transports
-
-`abap transport` inspects a request, and adds or removes objects in it:
-
-```console
-$ abap transport DHAK907262 list
-task DHAK907263  VAIBHAGO  Modifiable
-  locked  R3TR CLAS ZCL_SUBS_QUERY_PROVIDER
-  locked  R3TR DDLS ZCE_HEADER
-
-2 object(s) in DHAK907262
-
-$ abap transport DHAK907274 add ZCL_TSTMP_UTILITIES
-  +  R3TR CLAS ZCL_TSTMP_UTILITIES
-
-1 object(s) in DHAK907274
-```
-
-Objects live in *tasks*, not requests, so a request number is resolved to the
-task you own before anything is written.
-
-### Naming what to add
-
-Three forms, because not every entry is a whole object:
-
-| Form | Records | Example |
-| --- | --- | --- |
-| `NAME` | `R3TR` + the type from the workspace manifest | `ZCL_TSTMP_UTILITIES` |
-| `CLASS=>METHOD` | `LIMU METH` — one method on its own | `ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET` |
-| `PGMID:TYPE:NAME` | exactly what you type | `R3TR:TABL:ZMY_TABLE` |
-
-The method form is the one that matters for shared classes, and produces the
-same entry SAP writes when you edit a single method in Eclipse:
-
-```console
-$ abap transport DHAK907275 add 'ZCL_TSTMP_UTILITIES=>GET_TZ_OFFSET'
-  +  LIMU METH ZCL_TSTMP_UTILITIES           GET_TZ_OFFSET
-
-1 object(s) in DHAK907275
-```
-
-That spacing is not cosmetic: SAP stores a `LIMU METH` key as the class name
-padded to 30 characters followed by the method, so the CLI builds it that way.
-Interface implementations work through the same form —
-`ZCL_THING=>ZIF_THING~DO_IT`.
-
-Quote the argument. `=>` means nothing to zsh or bash, but shells differ and a
-stray `>` would redirect to a file.
-
-The plain `NAME` form needs the object in the workspace, since that is where its
-type comes from. `PGMID:TYPE:NAME` is the escape hatch when it is not, or when
-you want an entry the CLI would never infer. Types for `remove` come from the
-request itself, so an entry can still be named after its object is gone.
-
-**Removing works, and is addressed by position.** SAP identifies an entry by its
-position in the request, not by name, so the current contents are read
-immediately before the write — positions shift as entries go:
-
-```console
-$ abap transport DHAK907262 remove ZCL_PUSH_NEW_TEST ZCE_PUSH_NEW_TEST
-  -  R3TR CLAS ZCL_PUSH_NEW_TEST removed
-  -  R3TR DDLS ZCE_PUSH_NEW_TEST removed
-
-2 object(s) removed from DHAK907262
-```
-
-The result is read back afterwards rather than trusting the `200`: omit the
-position and SAP answers `200` and does nothing at all, so anything still in the
-request is reported as a failure instead of a success.
-
-Removing an object's only entry releases its lock, which is how you hand a class
-back without releasing the whole request.
+- Switching an existing workspace between `--se80` and `--flat` leaves the files
+  at the old paths on disk. Delete the folder and re-pull. See
+  [Layout](#layout).
+- A *new* `.fugr.abap` file is created as a function group, because four ADT
+  types share that extension. Create new function modules in Eclipse/ADT, then
+  re-pull. See [New objects](#new-objects).
 
 ## Licence
 

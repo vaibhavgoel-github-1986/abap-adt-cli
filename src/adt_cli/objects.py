@@ -18,11 +18,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 SOURCE_MAIN = "/source/main"
+# A part served by the object resource itself rather than a source endpoint.
+OBJECT_SELF = ""
 
 
 @dataclass(frozen=True)
 class Part:
-    """One editable text belonging to an object."""
+    """One editable text belonging to an object.
+
+    ``path`` is the URI segment that serves it. An empty path means the object
+    resource itself, which is how DDIC types are edited: they have no source
+    endpoint, only a typed XML document.
+    """
 
     suffix: str
     path: str
@@ -30,6 +37,10 @@ class Part:
     @property
     def is_main(self) -> bool:
         return self.path == SOURCE_MAIN
+
+    @property
+    def is_object(self) -> bool:
+        return not self.path
 
 
 @dataclass(frozen=True)
@@ -44,12 +55,13 @@ class ObjectType:
     def __post_init__(self) -> None:
         # Most types have exactly one editable text; spell it out so callers
         # never have to special-case the single-part shape.
-        if not self.parts and self.source_path:
+        if not self.parts and self.writable:
             object.__setattr__(self, "parts", (Part(self.extension, self.source_path),))
 
     @property
     def is_source(self) -> bool:
-        return bool(self.source_path)
+        """True when the type has anything pull can fetch and push can write."""
+        return bool(self.parts)
 
     @property
     def main(self) -> Part | None:
@@ -94,15 +106,21 @@ _TYPES: tuple[ObjectType, ...] = (
     ObjectType("TABL/DS", ".strc.asddls", "Dictionary/Structures"),
     ObjectType("TYPE/DG", ".type.abap", "Dictionary/Type Groups"),
     ObjectType("XSLT/VT", ".xslt.xml", "Transformations"),
-    # --- Non-source objects: metadata XML pulled, not writable by push -----
-    ObjectType("TTYP/DA", ".ttyp.xml", "Dictionary/Table Types", "", False),
-    ObjectType("DTEL/DE", ".dtel.xml", "Dictionary/Data Elements", "", False),
-    ObjectType("DOMA/DD", ".doma.xml", "Dictionary/Domains", "", False),
-    ObjectType("ENQU/DL", ".enqu.xml", "Dictionary/Lock Objects", "", False),
+    # --- Edited as the object's own XML, not as source --------------------
+    ObjectType("DTEL/DE", ".dtel.xml", "Dictionary/Data Elements", OBJECT_SELF),
+    ObjectType("DOMA/DD", ".doma.xml", "Dictionary/Domains", OBJECT_SELF),
+    ObjectType("TTYP/DA", ".ttyp.xml", "Dictionary/Table Types", OBJECT_SELF),
+    ObjectType("ENQU/DL", ".enqu.xml", "Dictionary/Lock Objects", OBJECT_SELF),
+    ObjectType("MSAG/N", ".msag.xml", "Message Classes", OBJECT_SELF),
+    ObjectType(
+        "SRVB/SVB", ".srvb.xml", "Business Services/Service Bindings", OBJECT_SELF
+    ),
+    # --- Listed by SAP, but ADT serves no editable content ----------------
+    # VIEW and WAPA answer with a SAP GUI shim rather than a real resource.
+    # ENHO has a resource, but SAP fails to serialise many of them with a 500.
     ObjectType("VIEW/DV", ".view.xml", "Dictionary/Views", "", False),
-    ObjectType("ENHO/XHB", ".enho.xml", "Enhancements", "", False),
-    ObjectType("SRVB/SVB", ".srvb.xml", "Business Services/Service Bindings", "", False),
-    ObjectType("MSAG/N", ".msag.xml", "Message Classes", "", False),
+    ObjectType("WAPA/WO", ".wapa.xml", "BSP Library", "", False),
+    ObjectType("ENHO/XHB", ".enho.xml", "Enhancements/Implementations", "", False),
     ObjectType("DEVC/K", ".devc.xml", "Packages", "", False),
     ObjectType("SUSH/S", ".sush.xml", "Authorization Default Values", "", False),
 )
@@ -135,6 +153,22 @@ def lookup(code: str) -> ObjectType:
 
 def known_codes() -> list[str]:
     return sorted(_BY_CODE)
+
+
+def supported() -> list[ObjectType]:
+    """Types with editable source, which are exactly the ones pull and push handle."""
+    return sorted(
+        (entry for entry in _TYPES if entry.is_source),
+        key=lambda entry: (entry.folder, entry.code),
+    )
+
+
+def listed_only() -> list[ObjectType]:
+    """Types the registry knows about but that have no editable source."""
+    return sorted(
+        (entry for entry in _TYPES if not entry.is_source),
+        key=lambda entry: entry.code,
+    )
 
 
 def type_for_file(filename: str) -> ObjectType | None:

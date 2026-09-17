@@ -15,7 +15,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from adt_cli import expand, repository, runtime, ui
+from adt_cli import config, expand, repository, runtime, ui
 from adt_cli.commands.options import DestOpt, JobsOpt, PackageArg, SystemOpt, TraceOpt
 from adt_cli.errors import AbapCliError, WorkspaceError
 from adt_cli.workspace import Workspace
@@ -61,9 +61,35 @@ def pull(
     ] = "",
     trace: TraceOpt = False,
 ) -> None:
-    """Download a package into a local folder, in parallel."""
+    """Download a package into a local folder, in parallel.
+
+    Every editable text becomes its own file, so a class arrives as its main
+    source plus any local definitions, local implementations, macros and test
+    classes it has, and a function group brings its includes and function
+    modules with it.
+
+    Run inside an already-pulled folder with no arguments to refresh it: the
+    package, system, layout and any --match/--type/--user narrowing are taken
+    from the last pull, so a refresh can never silently widen.
+
+    Object types ADT serves no editable content for are skipped and counted in
+    one line. Run 'abap types' to see what is covered.
+
+    Examples:
+
+      abap pull ZMY_PACKAGE                    into ./ZMY_PACKAGE
+      abap pull '$TMP'                         into ./<YOUR_USER>/$TMP
+      abap pull ZMY_PACKAGE --type CLAS,DDLS   only those types
+      abap pull ZMY_PACKAGE --match 'ZCL_A*'   only matching names
+      abap pull --force                        refresh, discarding local edits
+    """
     runtime.set_trace(trace)
-    root = runtime.resolve_root(dest, package)
+    # $TMP is filtered to one developer, so the folder is named after them too.
+    # Resolving the profile reads config only - no connection yet.
+    scope = user
+    if not scope and runtime.is_shared(package):
+        scope = config.resolve(name=system).user
+    root = runtime.resolve_root(dest, package, owner=scope)
     previous = Workspace.load(root)
 
     if not package:
@@ -86,7 +112,7 @@ def pull(
     # $TMP is one package shared by every developer, so narrow it to your own
     # objects unless asked otherwise. '*' is the explicit way back to everybody.
     owner = user or previous.owner
-    if not owner and package.startswith("$"):
+    if not owner and runtime.is_shared(package):
         owner = target.user
     owner_filter = "" if owner == "*" else owner.upper()
 
@@ -106,7 +132,13 @@ def pull(
             # Function groups only name themselves; their includes and function
             # modules are separate ADT objects that have to be resolved first.
             found = await expand.expand(adt, found, concurrency=jobs)
-            reachable = [obj for obj in found if repository.is_adt_resource(obj)]
+            # A type with no editable source can never be pushed back, so pulling
+            # its metadata would only fill the workspace with read-only files.
+            reachable = [
+                obj
+                for obj in found
+                if obj.kind.is_source and repository.is_adt_resource(obj)
+            ]
             elsewhere = len(found) - len(reachable)
             space = Workspace(
                 root=root,
@@ -129,11 +161,11 @@ def pull(
     elapsed = time.perf_counter() - started
     written = [result for result in results if result.ok and not result.absent]
     failed = [result for result in results if not result.ok]
-    # An object ADT lists but cannot serve, such as a Gateway Service Builder project.
+    # An object ADT lists but cannot serve, such as a generated extension view.
     unserved = {
         (result.obj.type_code, result.obj.name)
         for result in results
-        if result.absent and result.part is None
+        if result.absent and (result.part is None or result.part.is_main)
     }
     total = sum(len(result.text) for result in written)
     objects = len({(result.obj.type_code, result.obj.name) for result in written})
@@ -146,8 +178,8 @@ def pull(
         runtime.add_to_vscode(root)
     if elsewhere or unserved:
         ui.console.print(
-            f"[dim]{elsewhere + len(unserved)} object(s) have no ADT representation "
-            "and were skipped[/]"
+            f"[dim]{elsewhere + len(unserved)} object(s) have no editable content "
+            "in ADT and were skipped[/]"
         )
     if failed:
         ui.console.print(f"[dim]{len(failed)} object(s) failed to pull[/]")

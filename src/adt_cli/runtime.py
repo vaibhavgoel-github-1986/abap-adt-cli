@@ -84,15 +84,37 @@ def session(system: System, password: str, concurrency: int = 16) -> AdtSession:
     )
 
 
-def resolve_root(dest: Path | None, package: str) -> Path:
-    """Running inside a pulled workspace uses that folder, never a nested copy."""
+def resolve_root(dest: Path | None, package: str, owner: str = "") -> Path:
+    """Running inside a pulled workspace uses that folder, never a nested copy.
+
+    $TMP gets an owner level above it, because it is the one package every
+    developer shares and a pull of it only ever holds one person's objects.
+    """
     if dest:
         return dest.expanduser().resolve()
     here = Path.cwd().resolve()
     current = Workspace.load(here)
     if not package or (current.exists and current.package == package.upper()):
         return here
-    return (here / package.upper()).resolve()
+    folder = Path(package.upper())
+    if owner and is_shared(package):
+        folder = Path(owner.upper()) / folder
+    return (here / folder).resolve()
+
+
+def is_local(package: str) -> bool:
+    """True for $ packages, which are never transported."""
+    return package.startswith("$")
+
+
+def is_shared(package: str) -> bool:
+    """True only for $TMP, which every developer writes into.
+
+    Named local packages like $ZADT_VSP are ordinary packages that merely
+    cannot be transported, so narrowing them to one owner would silently hide
+    a colleague's objects.
+    """
+    return package.upper() == "$TMP"
 
 
 def load_workspace(root: Path) -> Workspace:

@@ -27,8 +27,18 @@ MANIFEST_FILE = "manifest.json"
 MANIFEST_VERSION = 1
 
 
+def canonical(text: str) -> str:
+    """The form SAP actually stores.
+
+    ADT serves CRLF and drops a trailing newline on write, so comparing raw text
+    would report every pushed file as changed on the server for ever after. An
+    editor adding a final newline is invisible for the same reason.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+
+
 def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical(text).encode("utf-8")).hexdigest()
 
 
 def read_source_file(path: Path) -> str:
@@ -226,21 +236,14 @@ class Workspace:
         return RepoObject(name=entry.name, type_code=entry.type_code, uri=entry.uri)
 
     def part_for(self, local: str) -> objects.Part | None:
-        """Which editable text a tracked file writes back to."""
-        entry = self.files.get(local)
-        if entry is None:
-            found = objects.part_for_file(local)
-            return found[1] if found else None
-        if not entry.part:
-            return objects.lookup(entry.type_code).main
-        return next(
-            (
-                part
-                for part in objects.lookup(entry.type_code).parts
-                if part.path == entry.part
-            ),
-            None,
-        )
+        """Which editable text a file writes back to.
+
+        The file name decides it: every part has its own suffix, and an object
+        part's URI segment is empty, so the recorded path cannot tell an object
+        part apart from one that was never recorded.
+        """
+        found = objects.part_for_file(local)
+        return found[1] if found else None
 
     def writable(self, local: str) -> bool:
         return local in self.files and objects.lookup(self.files[local].type_code).writable

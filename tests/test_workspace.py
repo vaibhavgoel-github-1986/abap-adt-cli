@@ -97,6 +97,22 @@ def test_se80_is_the_default_layout(tmp_path):
     assert Workspace(root=tmp_path).se80 is True
 
 
+def test_hashing_ignores_what_sap_normalises_away():
+    """SAP drops the trailing newline on write, so it must not count as a change."""
+    assert sha256("CLASS x.\nENDCLASS.") == sha256("CLASS x.\nENDCLASS.\n")
+    assert sha256("CLASS x.\nENDCLASS.") == sha256("CLASS x.\r\nENDCLASS.\r\n")
+    assert sha256("CLASS x.\nENDCLASS.") != sha256("CLASS x.\nENDCLASS. \" edit")
+
+
+def test_pushed_file_does_not_drift_against_the_server(tmp_path):
+    space = _space(tmp_path)
+    obj = RepoObject("ZCL_A", "CLAS/OC", "/uri")
+    local = space.write(obj, "CLASS zcl_a.\nENDCLASS.\n")
+
+    # What ADT hands back after storing it: CRLF, and no trailing newline.
+    assert sha256("CLASS zcl_a.\r\nENDCLASS.") == space.files[local].sha256
+
+
 def test_se80_clubs_every_part_of_an_object_in_one_folder(tmp_path):
     space = _se80(tmp_path)
     obj = RepoObject("ZCL_A", "CLAS/OC", "/sap/bc/adt/oo/classes/zcl_a")

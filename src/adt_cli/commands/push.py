@@ -30,7 +30,26 @@ def push(
     ] = False,
     trace: TraceOpt = False,
 ) -> None:
-    """Upload locally modified objects. They stay inactive until activated."""
+    """Upload locally modified objects. They stay inactive until activated.
+
+    Each changed file is written to its own ADT endpoint, so editing one class
+    include records a single LIMU entry instead of locking the whole class, and
+    a colleague can work on another part of the same object in another
+    transport.
+
+    Push refuses when the server copy changed since your pull, because sending
+    would overwrite that work: re-pull to inspect, or pass --force. A
+    transportable package needs --transport; $TMP and other local packages
+    never do. Files ADT cannot write, such as a reformatted metadata document,
+    are reported and skipped rather than stopping the run.
+
+    Examples:
+
+      abap push --dry-run                          show what would be sent
+      abap push --transport DHAK900123             send it
+      abap push --transport DHAK900123 --activate  send and activate
+      abap push --force                            overwrite server changes
+    """
     runtime.set_trace(trace)
     requested = cts.normalise_request(transport)
     root = runtime.resolve_root(dest, package)
@@ -51,7 +70,7 @@ def push(
 
     target, password = runtime.connect(space.system)
     # Local packages ($TMP and friends) are never transported.
-    local_package = space.package.startswith("$")
+    local_package = runtime.is_local(space.package)
 
     async def body() -> activation.Outcome | None:
         async with runtime.session(target, password) as adt:
@@ -99,18 +118,21 @@ def _plan_files(space: Workspace, dry_run: bool) -> list[str] | None:
         ui.console.print("nothing to push - no local changes")
         return None
 
+    # Metadata XML has no source endpoint. An editor reformatting one must not
+    # stop the source files around it from being pushed.
     blocked = [local for local in modified if not space.writable(local)]
+    modified = [local for local in modified if local not in set(blocked)]
     unsupported = [
         local for local in fresh if not creation.supported(objects.type_for_file(local).code)
     ]
-    if blocked:
-        for local in blocked:
-            ui.problem(f"{local} is not a writable source object")
-        raise AbapCliError("refusing to push non-source objects")
-    if unsupported:
-        for local in unsupported:
-            ui.problem(f"{local} is a new object of a type this CLI cannot create yet")
-        raise AbapCliError("create these in Eclipse/ADT first, then re-pull")
+    fresh = [local for local in fresh if local not in set(unsupported)]
+
+    for local in blocked:
+        ui.note(f"{local} is not a writable source object, skipped")
+    for local in unsupported:
+        ui.note(f"{local} is a new object of a type this CLI cannot create yet, skipped")
+    if not modified and not fresh:
+        raise AbapCliError("nothing left to push - every change is in a file ADT cannot write")
 
     for local in fresh:
         ui.console.print(f"  {ui.MARKER_NEW}  {local}  [dim](new)[/]")
@@ -178,13 +200,18 @@ async def _upload(
     pushed = []
     for local in modified:
         obj = space.object_for(local)
+        part = space.part_for(local)
         text = space.read(local)
-        await repository.write_source(
-            adt, obj, text, part=space.part_for(local), transport=transport
-        )
-        # Re-baseline as we go: a later failure must not make an already pushed
-        # object look unpushed.
-        space.files[local].sha256 = workspace.sha256(text)
+        await repository.write_source(adt, obj, text, part=part, transport=transport)
+        if part is not None and part.is_object:
+            # SAP stamps changedAt and changedBy onto the object's own XML, so
+            # what it stored is never byte-identical to what we sent. Take the
+            # server's copy as the new truth or every push would look drifted.
+            space.write(obj, await repository.read_part(adt, obj, part), part)
+        else:
+            # Re-baseline as we go: a later failure must not make an already
+            # pushed object look unpushed.
+            space.files[local].sha256 = workspace.sha256(text)
         space.save()
         pushed.append(obj)
         ui.console.print(f"  [green]pushed[/] {local}")
