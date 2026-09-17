@@ -30,6 +30,15 @@ def note(message: str) -> None:
     console.print(f"[yellow]note[/] {message}")
 
 
+def raw(text: str) -> None:
+    """A payload, byte for byte.
+
+    Rich wraps at the terminal width and reads '[...]' as markup, either of
+    which would corrupt XML or JSON on its way into a file or a pipe.
+    """
+    print(text)
+
+
 def warn(message: str) -> None:
     err_console.print(f"[yellow]warning[/] {message}")
 

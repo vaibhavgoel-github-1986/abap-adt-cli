@@ -80,7 +80,7 @@ def api(
     async def body_() -> None:
         async with runtime.session(profile, password) as adt:
             if metadata:
-                ui.console.print(
+                ui.raw(
                     await odata.metadata(
                         adt, service, namespace=namespace, version=version
                     )
@@ -106,7 +106,7 @@ def _report(status: int, answer: object, raw: bool) -> None:
         ui.console.print(f"[green]{status}[/] [dim]no content[/]")
         return
     if raw or isinstance(answer, str):
-        ui.console.print(answer if isinstance(answer, str) else json.dumps(answer))
+        ui.raw(answer if isinstance(answer, str) else json.dumps(answer))
         return
     ui.console.print_json(json.dumps(answer))
     found = odata.rows(answer)
