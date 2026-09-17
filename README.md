@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.4.0"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.5.0"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -179,6 +179,7 @@ abap --trace push --transport DHAK900123
 | [`abap transports`](#abap-transports) | every request you own, filtered by status and category |
 | [`abap transports new "DESC"`](#abap-transports) | create a request |
 | [`abap transports attr TR NAME=VALUE`](#abap-transports) | show or set CTS attributes |
+| [`abap transports delete TR`](#abap-transports) | delete a request or task |
 | [`abap transport TR list`](#abap-transport) | what a request contains |
 | [`abap transport TR add NAME...`](#abap-transport) | add objects, whole or method-level |
 | [`abap transport TR remove NAME...`](#abap-transport) | remove objects from a request |
@@ -242,8 +243,8 @@ Full detail: [Deleting](#deleting).
 #### `abap transports`
 
 Every request you own, split into workbench and customizing, modifiable and
-released, with a filter for each. `new` creates one from a description, and
-`attr` shows or sets its CTS attributes.
+released, with a filter for each. `new` creates one from a description,
+`attr` shows or sets its CTS attributes, and `delete` removes it.
 Full detail: [Transports](#transports).
 
 #### `abap transport`
@@ -752,6 +753,26 @@ than silently ignored:
 $ abap transports attr DHAK907312 Z_NOT_A_THING=x
 error Z_NOT_A_THING is not a valid attribute; enter a valid attribute
 ```
+
+### Deleting a request
+
+```console
+$ abap transports delete DHAK907312
+DHAK907312
+  task DHAK907313  VAIBHAGO  Modifiable
+  D  R3TR CLAS ZCL_THING
+
+This deletes DHAK907312 and the 1 object(s) in it. A deleted request cannot be
+restored by this CLI.
+Continue? [y/N]:
+```
+
+The contents are read and shown *before* the prompt, so you can see what goes
+with it. `--yes` / `-y` skips the confirmation for scripts.
+
+SAP does the refusing here rather than the CLI: a released request cannot be
+deleted, and neither can one still holding object locks. The transport number is
+checked for shape before anything connects, so a typo costs nothing.
 
 ### Working on one request
 
@@ -1427,8 +1448,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.4.0"
-git tag v1.4.0
+git commit -am "release 1.5.0"
+git tag v1.5.0
 git push && git push --tags
 ```
 

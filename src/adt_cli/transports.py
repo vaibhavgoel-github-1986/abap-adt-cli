@@ -325,6 +325,20 @@ async def task_for(session: AdtSession, number: str, user: str) -> str:
     return (mine or tasks)[0].number
 
 
+async def delete(session: AdtSession, number: str) -> None:
+    """Delete a request, or a single task inside one.
+
+    SAP refuses on its own once a request is released or still holds locks, so
+    the server's message is what the caller sees rather than a guess made here.
+    """
+    await session.request(
+        "DELETE",
+        f"{REQUESTS}/{number.upper()}",
+        accept=ORGANIZER,
+        allow=(200, 201, 202, 204),
+    )
+
+
 def _payload(number: str, action: str, objects: list[TransportObject]) -> str:
     entries = "".join(
         f'<tm:abap_object tm:pgmid="{entry.pgmid}" tm:type="{entry.type_code}"'

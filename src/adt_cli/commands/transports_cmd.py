@@ -11,7 +11,7 @@ from adt_cli.commands.options import DestOpt, TraceOpt
 from adt_cli.errors import AbapCliError
 from adt_cli.workspace import Workspace
 
-ACTIONS = ("list", "new", "attr")
+ACTIONS = ("list", "new", "attr", "delete")
 
 
 def _wanted(request: transports.Request, customizing: bool | None) -> bool:
@@ -33,7 +33,9 @@ def _pair(token: str) -> tuple[str, str]:
 
 @runtime.guard
 def transports_(
-    action: Annotated[str, typer.Argument(help="'list' (default), 'new' or 'attr'.")] = "list",
+    action: Annotated[
+        str, typer.Argument(help="'list' (default), 'new', 'attr' or 'delete'.")
+    ] = "list",
     args: Annotated[
         list[str] | None,
         typer.Argument(help="Description for 'new'; TR then NAME=VALUE... for 'attr'."),
@@ -64,6 +66,9 @@ def transports_(
     objects: Annotated[
         bool, typer.Option("--objects", help="Also list the objects in each request.")
     ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip the confirmation for 'delete'.")
+    ] = False,
     dest: DestOpt = None,
     system: Annotated[str, typer.Option("--system", "-s", help="Named system.")] = "",
     trace: TraceOpt = False,
@@ -81,6 +86,9 @@ def transports_(
     'attr' shows or sets the CTS attributes of a request - Jira keys and the
     like. Setting one the request already carries replaces its value.
 
+    'delete' removes a request or a single task. SAP refuses once it has been
+    released, and the contents are shown before anything happens.
+
     Examples:
 
       abap transports                          everything you own
@@ -93,6 +101,7 @@ def transports_(
       abap transports attr DHAK900123          what it carries
       abap transports attr DHAK900123 Z_JIRA_US=O2CSM-1234
       abap transports attr --names             what this system defines
+      abap transports delete DHAK900123        drop an unwanted request
     """
     runtime.set_trace(trace)
     rest = [token for token in (args or []) if token.strip()]
@@ -110,11 +119,15 @@ def transports_(
         if not rest:
             raise AbapCliError("'attr' needs a transport, e.g. abap transports attr DHAK900123")
         pairs += [_pair(token) for token in rest[1:]]
+    if action == "delete" and len(rest) != 1:
+        raise AbapCliError("'delete' needs one transport, e.g. abap transports delete DHAK900123")
     if action == "list":
         if rest:
             raise AbapCliError(f"'list' takes no argument - did you mean 'new {rest[0]}'?")
         if pairs:
             raise AbapCliError("--attr applies to 'new' and 'attr', not 'list'")
+    # Checked before connecting, so a typo costs nothing.
+    number = cts.normalise_request(rest[0]) if action in ("attr", "delete") and rest else ""
 
     space = Workspace.load(runtime.resolve_root(dest, ""))
     profile, password = runtime.connect(system or (space.system if space.exists else ""))
@@ -126,7 +139,9 @@ def transports_(
             elif action == "attr" and names:
                 await _catalogue(adt)
             elif action == "attr":
-                await _attributes(adt, cts.normalise_request(rest[0]), pairs)
+                await _attributes(adt, number, pairs)
+            elif action == "delete":
+                await _delete(adt, number, yes)
             else:
                 await _list(
                     adt, user, _only(released, unreleased), _only(customizing, workbench), objects
@@ -167,6 +182,26 @@ async def _attributes(adt, number: str, pairs: list[tuple[str, str]]) -> None:
     for entry in present:
         ui.console.print(f"  {entry.describe()}")
     ui.console.print(f"\n{len(present)} attribute(s) on {number}")
+
+
+async def _delete(adt, number: str, yes: bool) -> None:
+    entries, tasks = await transports.read(adt, number)
+    ui.console.print(f"[bold]{number}[/]")
+    for task in tasks:
+        ui.console.print(f"[dim]  task {task.number}  {task.owner}  {task.status}[/]")
+    for entry in entries:
+        ui.console.print(f"  {ui.MARKER_DELETED}  {entry.describe()}")
+    if not yes:
+        held = f" and the {len(entries)} object(s) in it" if entries else ""
+        ui.console.print(
+            f"\n[red]This deletes {number}{held}.[/] "
+            "A deleted request cannot be restored by this CLI."
+        )
+        if not typer.confirm("Continue?"):
+            ui.console.print("cancelled")
+            return
+    await transports.delete(adt, number)
+    ui.console.print(f"[green]deleted[/] {number}")
 
 
 async def _catalogue(adt) -> None:
