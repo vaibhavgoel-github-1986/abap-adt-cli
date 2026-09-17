@@ -50,20 +50,32 @@ for you.
 
 ## Install
 
+Inside Cisco:
+
+```bash
+pipx install "git+https://wwwin-github.cisco.com/vaibhago/abap-adt-cli"
+```
+
+Anywhere else:
+
 ```bash
 pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 ```
+
+The two repositories hold the same code; the internal one is primary and the
+public one is a mirror. Install from whichever you can reach.
 
 `pipx` keeps the CLI in its own virtualenv and puts `abap` on your `PATH`. Plain
 `pip install` works too. To pin a published version rather than the tip of the
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.3"
+pipx install "git+https://wwwin-github.cisco.com/vaibhago/abap-adt-cli@v1.6.4"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.4"
 ```
 
-Afterwards `abap update` keeps it current — see
-[Versions and updating](#versions-and-updating).
+Afterwards `abap update` keeps it current — with one caveat if you installed from
+the internal mirror, see [Versions and updating](#versions-and-updating).
 
 ## First-time setup
 
@@ -1712,6 +1724,17 @@ error this looks like a source checkout, not an installed copy -
 A `--version` argument is matched against a version pattern before it reaches
 the install URL. Anything else is refused rather than interpolated.
 
+**`abap update` always follows the public repository**, because it reads the
+GitHub releases API and that is where releases are published. If you installed
+from the internal mirror and would rather stay on it, upgrade with pipx directly
+instead:
+
+```bash
+pipx install --force "git+https://wwwin-github.cisco.com/vaibhago/abap-adt-cli@v1.6.4"
+```
+
+Both repositories carry the same tags, so the two routes land on the same code.
+
 ### Cutting a release
 
 There is one version number, in `src/adt_cli/__init__.py`. `pyproject.toml`
@@ -1719,9 +1742,10 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.6.3"
-git tag v1.6.3
-git push && git push --tags
+git commit -am "release 1.6.4"
+git tag v1.6.4
+git push origin main --tags     # internal, primary
+git push public main --tags     # public mirror
 ```
 
 `abap update` finds the newest GitHub release, and falls back to the newest tag
