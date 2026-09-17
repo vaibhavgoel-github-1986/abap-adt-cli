@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.3.0"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.4.0"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -310,16 +310,29 @@ pull; everything else still lands.
 
 ### Sub-packages
 
-SAP applications are package *hierarchies*: the name you know is usually a
-structure package holding nothing but the sub-packages that hold the code. So
-`abap pull` walks the tree by default, listing each package it finds and then
-the packages below it, and reports how wide it went:
+SAP applications are package *hierarchies*, and `abap pull` brings the whole
+hierarchy down by default:
 
 ```console
 $ abap pull ZS4INTCPQ
 connected to dha-110, listing ZS4INTCPQ and its sub-packages...
+5154 objects in 9 packages
   pulling 4812 objects ━━━━━━━━━━━━━━━━━━━━ 6701/6701 0:02:04
 pulled ZS4INTCPQ from dha-110 - 4790 objects in 4881 files across 9 packages, ...
+```
+
+The listing endpoint does most of that on its own: SAP's `package` facet is
+*already* hierarchical, so asking for one package returns the objects of every
+package beneath it too. Walking the tree is therefore not what finds the
+children — it is what tells parent and child apart.
+
+That is why `--no-subpackages` works by subtraction. It lists the sub-packages
+as well, then drops everything they account for, leaving only what sits directly
+in the package you named:
+
+```console
+$ abap pull ZS4INTCPQ --no-subpackages
+5046 objects in 1 package
 ```
 
 An object listed by two packages is fetched once, and a cycle in the hierarchy
@@ -328,9 +341,8 @@ terminates because each package is visited only once. `--match`, `--type`,
 the same workspace regardless of which package it came from — the manifest tracks
 objects, not packages.
 
-Pass `--no-subpackages` to take the named package alone. The choice is recorded
-in the manifest, so a later bare `abap pull` refresh reaches exactly as far as
-the pull it repeats and can never silently widen.
+The choice is recorded in the manifest, so a later bare `abap pull` refresh
+reaches exactly as far as the pull it repeats and can never silently widen.
 
 A workspace pulled **before 1.1.0** has no such record, and is refreshed as the
 single package it originally was. Pass `--subpackages` once to widen it
@@ -730,7 +742,11 @@ $ abap transports attr --names
 46 attribute(s) defined on this system
 ```
 
-A name that is not one of them is refused by SAP rather than silently ignored:
+That list is SAP's own value help, which is what the Eclipse dialog uses, so it
+is the set you are *allowed* to set. The underlying table `WBOATTR` holds a few
+more — `SAPCORR`, `SAPIMG`, `TAKT*` and friends — that SAP maintains itself and
+hides from the dialog. Anything the value help omits is refused by SAP rather
+than silently ignored:
 
 ```console
 $ abap transports attr DHAK907312 Z_NOT_A_THING=x
@@ -1411,8 +1427,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.3.0"
-git tag v1.3.0
+git commit -am "release 1.4.0"
+git tag v1.4.0
 git push && git push --tags
 ```
 

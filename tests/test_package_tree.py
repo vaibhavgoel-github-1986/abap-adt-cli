@@ -31,17 +31,32 @@ class _Reply:
 
 
 class _Session:
-    """A package hierarchy: name -> (objects in it, packages under it)."""
+    """A package hierarchy: name -> (objects directly in it, packages under it).
+
+    Listing a package answers with its own objects *and* every descendant's,
+    which is how SAP's package facet actually behaves.
+    """
 
     def __init__(self, tree: dict[str, tuple[list[tuple[str, str]], list[str]]]) -> None:
         self.tree = tree
         self.listed: list[str] = []
         self.walked: list[str] = []
 
+    def _subtree(self, package: str, seen: set[str] | None = None) -> list[tuple[str, str]]:
+        seen = seen if seen is not None else set()
+        if package in seen or package not in self.tree:
+            return []
+        seen.add(package)
+        own, children = self.tree[package]
+        rows = list(own)
+        for child in children:
+            rows += self._subtree(child, seen)
+        return rows
+
     async def post(self, path, *, content, content_type, accept):
         package = re.search(r"<vfs:value>(.*?)</vfs:value>", content).group(1)
         self.listed.append(package)
-        return _Reply(_objects(self.tree.get(package, ([], []))[0]))
+        return _Reply(_objects(self._subtree(package)))
 
     async def request(self, method, path, *, params, **kwargs):
         package = params["parent_name"]
@@ -57,23 +72,33 @@ TREE = {
 }
 
 
-async def test_tree_descends_the_whole_hierarchy():
+async def test_the_whole_hierarchy_comes_down_by_default():
     session = _Session(TREE)
 
     found, visited = await repository.list_tree(session, "ZROOT")
 
     assert [obj.name for obj in found] == ["ZCL_A", "ZCL_B", "ZCL_DEEP", "ZCL_ROOT"]
-    assert sorted(visited) == ["ZCHILD_A", "ZCHILD_B", "ZGRANDCHILD", "ZROOT"]
+    assert visited == ["ZCHILD_A", "ZCHILD_B", "ZGRANDCHILD", "ZROOT"]
 
 
-async def test_tree_stops_at_the_named_package_when_not_recursing():
+async def test_not_recursing_keeps_only_what_sits_in_the_named_package():
+    """SAP's listing already includes the children, so they have to be subtracted."""
     session = _Session(TREE)
 
     found, visited = await repository.list_tree(session, "ZROOT", recurse=False)
 
     assert [obj.name for obj in found] == ["ZCL_ROOT"]
     assert visited == ["ZROOT"]
-    assert session.walked == []
+    # The children still have to be listed - that is what identifies them.
+    assert sorted(session.walked) == ["ZCHILD_A", "ZCHILD_B", "ZGRANDCHILD", "ZROOT"]
+
+
+async def test_a_deep_object_is_dropped_by_no_subpackages():
+    session = _Session(TREE)
+
+    found, _ = await repository.list_tree(session, "ZCHILD_A", recurse=False)
+
+    assert [obj.name for obj in found] == ["ZCL_A"]
 
 
 async def test_a_cycle_visits_every_package_once():
@@ -87,7 +112,7 @@ async def test_a_cycle_visits_every_package_once():
     found, visited = await repository.list_tree(session, "ZA")
 
     assert [obj.name for obj in found] == ["ZCL_A", "ZCL_B"]
-    assert sorted(visited) == ["ZA", "ZB"]
+    assert visited == ["ZA", "ZB"]
     assert sorted(session.listed) == ["ZA", "ZB"]
 
 

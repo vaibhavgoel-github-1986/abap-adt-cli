@@ -47,7 +47,7 @@ def pull(
         bool | None,
         typer.Option(
             "--subpackages/--no-subpackages",
-            help="Also pull the packages below this one (default), or this one alone.",
+            help="Include the packages below this one (default), or this package alone.",
         ),
     ] = None,
     jobs: JobsOpt = 30,
@@ -70,9 +70,10 @@ def pull(
 ) -> None:
     """Download a package into a local folder, in parallel.
 
-    The whole package hierarchy comes down by default, because a structure
-    package usually holds nothing but the sub-packages that hold the code.
-    Pass --no-subpackages to take the named package alone.
+    The whole package hierarchy comes down by default. SAP lists a package's
+    sub-packages as part of the package itself, so --no-subpackages has to
+    subtract them: it pulls only the objects that sit directly in the package
+    named.
 
     Every editable text becomes its own file, so a class arrives as its main
     source plus any local definitions, local implementations, macros and test
@@ -151,6 +152,8 @@ def pull(
                 recurse=recurse,
                 concurrency=jobs,
             )
+            spread = f" in {len(packages)} packages" if len(packages) > 1 else ""
+            ui.console.print(f"[dim]{len(found)} objects{spread}[/]")
             if wanted:
                 found = [obj for obj in found if wanted_type(obj.type_code, wanted)]
             if not found:

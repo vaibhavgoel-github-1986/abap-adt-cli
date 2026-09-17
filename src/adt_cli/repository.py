@@ -222,39 +222,50 @@ async def list_tree(
     recurse: bool = True,
     concurrency: int = 16,
 ) -> tuple[list[RepoObject], list[str]]:
-    """Every object in a package and, when recursing, in the packages below it.
+    """Every object in a package, and by default in the packages below it.
 
-    A package hierarchy is how SAP actually organises an application, so pulling
-    only the top node usually brings back the empty structure package and none
-    of the code. Returns the objects and the packages they came from, so the
-    caller can report how wide the pull went.
+    SAP's package facet is already hierarchical: listing a package returns the
+    objects of every package underneath it as well. The walk is therefore not
+    what finds the children - it is what tells parent and child apart, because
+    the objects of the sub-packages are exactly what ``recurse=False`` drops.
 
-    An object listed by two packages is kept once; a cycle in the hierarchy
-    terminates because a package is only ever visited once.
+    Returns the objects and the packages they were taken from. A package is
+    visited once, so a cycle in the hierarchy terminates.
     """
     gate = asyncio.Semaphore(max(1, concurrency))
+    root = package.upper()
 
-    async def visit(name: str) -> tuple[list[RepoObject], list[str]]:
+    async def visit(name: str) -> tuple[str, list[RepoObject], list[str]]:
         async with gate:
             here = await list_package(session, name, pattern=pattern, owner=owner)
-            children = await list_subpackages(session, name) if recurse else []
-        return here, children
+            children = await list_subpackages(session, name)
+        return name, here, children
 
-    found: dict[tuple[str, str], RepoObject] = {}
-    visited: list[str] = []
-    seen = {package.upper()}
-    pending = [package.upper()]
+    listings: dict[str, list[RepoObject]] = {}
+    seen = {root}
+    pending = [root]
     while pending:
         batch = await asyncio.gather(*(visit(name) for name in pending))
-        visited.extend(pending)
         pending = []
-        for here, children in batch:
-            for obj in here:
-                found.setdefault((obj.type_code, obj.name), obj)
+        for name, here, children in batch:
+            listings[name] = here
             for child in children:
                 if child not in seen:
                     seen.add(child)
                     pending.append(child)
+
+    found: dict[tuple[str, str], RepoObject] = {}
+    for obj in listings[root]:
+        found.setdefault((obj.type_code, obj.name), obj)
+    if not recurse:
+        below = {
+            (obj.type_code, obj.name)
+            for name, here in listings.items()
+            if name != root
+            for obj in here
+        }
+        found = {key: obj for key, obj in found.items() if key not in below}
+    visited = sorted(listings) if recurse else [root]
     return sorted(found.values(), key=lambda entry: (entry.type_code, entry.name)), visited
 
 
