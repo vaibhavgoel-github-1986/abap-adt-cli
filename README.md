@@ -87,10 +87,14 @@ cd ~/Documents/ZGET_SUBS_API_V2
 ```
 
 ```console
-connected to dha-110, listing ZGET_SUBS_API_V2...
+connected to dha-110, listing ZGET_SUBS_API_V2 and its sub-packages...
 pulling 30 objects ━━━━━━━━━━━━━━━━━━━━ 74/74 0:00:02
 pulled ZGET_SUBS_API_V2 from dha-110 - 30 objects in 38 files, 204,345 bytes in 2.3s
 ```
+
+That brings down the named package **and every package underneath it**, because
+a package in SAP is usually a hierarchy. Pass `--no-subpackages` for the named
+package alone. See [Sub-packages](#sub-packages).
 
 The bar counts *requests*, not objects, because one object can be several
 editable texts — a class is up to five. You now have ordinary files, laid out the
@@ -317,6 +321,14 @@ objects, not packages.
 Pass `--no-subpackages` to take the named package alone. The choice is recorded
 in the manifest, so a later bare `abap pull` refresh reaches exactly as far as
 the pull it repeats and can never silently widen.
+
+A workspace pulled **before 1.1.0** has no such record, and is refreshed as the
+single package it originally was. Pass `--subpackages` once to widen it
+deliberately:
+
+```bash
+abap pull ZMY_PACKAGE --subpackages --force
+```
 
 ### Layout
 
