@@ -80,7 +80,7 @@ def delete(
     Examples:
 
       abap delete ZCL_THING --dry-run
-      abap delete ZCL_THING ZIF_THING --transport DHAK900123
+      abap delete ZCL_THING ZIF_THING --transport DEVK900123
     """
     runtime.set_trace(trace)
     requested = cts.normalise_request(transport)
@@ -187,10 +187,10 @@ def transport(
 
     Examples:
 
-      abap transport DHAK900123
-      abap transport DHAK900123 add ZCL_THING
-      abap transport DHAK900123 add ZCL_THING=>CONSTRUCTOR
-      abap transport DHAK900123 remove R3TR:CLAS:ZCL_THING
+      abap transport DEVK900123
+      abap transport DEVK900123 add ZCL_THING
+      abap transport DEVK900123 add ZCL_THING=>CONSTRUCTOR
+      abap transport DEVK900123 remove R3TR:CLAS:ZCL_THING
     """
     runtime.set_trace(trace)
     number = cts.normalise_request(number)

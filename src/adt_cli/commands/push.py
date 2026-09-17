@@ -46,8 +46,8 @@ def push(
     Examples:
 
       abap push --dry-run                          show what would be sent
-      abap push --transport DHAK900123             send it
-      abap push --transport DHAK900123 --activate  send and activate
+      abap push --transport DEVK900123             send it
+      abap push --transport DEVK900123 --activate  send and activate
       abap push --force                            overwrite server changes
     """
     runtime.set_trace(trace)

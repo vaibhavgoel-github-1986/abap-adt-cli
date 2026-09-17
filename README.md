@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.2"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.3"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -1719,8 +1719,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.6.2"
-git tag v1.6.2
+git commit -am "release 1.6.3"
+git tag v1.6.3
 git push && git push --tags
 ```
 

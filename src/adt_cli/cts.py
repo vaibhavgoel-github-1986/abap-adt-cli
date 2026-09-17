@@ -23,7 +23,7 @@ CHECK_TYPE = (
     "application/vnd.sap.as+xml; charset=UTF-8; "
     "dataname=com.sap.adt.transport.service.checkData"
 )
-# <SID>K<number>, e.g. DHAK900123.
+# <SID>K<number>, e.g. DEVK900123.
 _REQUEST_ID = re.compile(r"^[A-Z][A-Z0-9]{2}K[0-9]{4,}$")
 
 
@@ -34,7 +34,7 @@ def normalise_request(value: str) -> str:
         return ""
     if not _REQUEST_ID.match(cleaned):
         raise ConfigError(
-            f"'{value}' is not a transport request id - expected something like DHAK900123"
+            f"'{value}' is not a transport request id - expected something like DEVK900123"
         )
     return cleaned
 

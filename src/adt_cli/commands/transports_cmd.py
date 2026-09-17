@@ -27,7 +27,7 @@ def _pair(token: str) -> tuple[str, str]:
     """NAME=VALUE, split on the first '=' so the value may contain more."""
     name, sign, value = token.partition("=")
     if not sign or not name.strip():
-        raise AbapCliError(f"'{token}' is not NAME=VALUE, e.g. Z_JIRA_US=O2CSM-1234")
+        raise AbapCliError(f"'{token}' is not NAME=VALUE, e.g. Z_TICKET=ABC-1234")
     return name.strip().upper(), value.strip()
 
 
@@ -95,13 +95,13 @@ def transports_(
       abap transports --unreleased             only what you can still change
       abap transports --released --workbench   released workbench requests
       abap transports --user ANOTHER_DEV       somebody else's
-      abap transports new 'O2CSM-1234 fix'     a workbench request
+      abap transports new 'ABC-1234 fix'     a workbench request
       abap transports new 'config' --customizing
-      abap transports new 'fix' -a Z_JIRA_US=O2CSM-1234
-      abap transports attr DHAK900123          what it carries
-      abap transports attr DHAK900123 Z_JIRA_US=O2CSM-1234
+      abap transports new 'fix' -a Z_TICKET=ABC-1234
+      abap transports attr DEVK900123          what it carries
+      abap transports attr DEVK900123 Z_TICKET=ABC-1234
       abap transports attr --names             what this system defines
-      abap transports delete DHAK900123        drop an unwanted request
+      abap transports delete DEVK900123        drop an unwanted request
     """
     runtime.set_trace(trace)
     rest = [token for token in (args or []) if token.strip()]
@@ -117,10 +117,10 @@ def transports_(
             raise AbapCliError("a request is either workbench or customizing, not both")
     if action == "attr" and not names:
         if not rest:
-            raise AbapCliError("'attr' needs a transport, e.g. abap transports attr DHAK900123")
+            raise AbapCliError("'attr' needs a transport, e.g. abap transports attr DEVK900123")
         pairs += [_pair(token) for token in rest[1:]]
     if action == "delete" and len(rest) != 1:
-        raise AbapCliError("'delete' needs one transport, e.g. abap transports delete DHAK900123")
+        raise AbapCliError("'delete' needs one transport, e.g. abap transports delete DEVK900123")
     if action == "list":
         if rest:
             raise AbapCliError(f"'list' takes no argument - did you mean 'new {rest[0]}'?")

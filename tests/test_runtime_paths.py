@@ -8,16 +8,16 @@ from adt_cli import runtime
 def test_local_packages_are_scoped_to_their_owner(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    root = runtime.resolve_root(None, "$TMP", owner="vaibhago")
+    root = runtime.resolve_root(None, "$TMP", owner="developer")
 
-    assert root == (tmp_path / "VAIBHAGO" / "$TMP").resolve()
+    assert root == (tmp_path / "DEVELOPER" / "$TMP").resolve()
 
 
 def test_named_local_packages_are_not_owner_scoped(tmp_path, monkeypatch):
     """$ZADT_VSP is an ordinary package that merely cannot be transported."""
     monkeypatch.chdir(tmp_path)
 
-    root = runtime.resolve_root(None, "$ZADT_VSP", owner="vaibhago")
+    root = runtime.resolve_root(None, "$ZADT_VSP", owner="developer")
 
     assert root == (tmp_path / "$ZADT_VSP").resolve()
 
@@ -25,9 +25,9 @@ def test_named_local_packages_are_not_owner_scoped(tmp_path, monkeypatch):
 def test_transportable_packages_have_no_owner_level(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    root = runtime.resolve_root(None, "ZS4INTCPQ", owner="vaibhago")
+    root = runtime.resolve_root(None, "ZEXAMPLE_SUITE", owner="developer")
 
-    assert root == (tmp_path / "ZS4INTCPQ").resolve()
+    assert root == (tmp_path / "ZEXAMPLE_SUITE").resolve()
 
 
 def test_local_package_without_an_owner_keeps_the_flat_name(tmp_path, monkeypatch):
@@ -39,7 +39,7 @@ def test_local_package_without_an_owner_keeps_the_flat_name(tmp_path, monkeypatc
 def test_explicit_dest_always_wins(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    root = runtime.resolve_root(Path("elsewhere"), "$TMP", owner="vaibhago")
+    root = runtime.resolve_root(Path("elsewhere"), "$TMP", owner="developer")
 
     assert root == (tmp_path / "elsewhere").resolve()
 
@@ -47,11 +47,11 @@ def test_explicit_dest_always_wins(tmp_path, monkeypatch):
 def test_is_local_only_matches_dollar_packages():
     assert runtime.is_local("$TMP")
     assert runtime.is_local("$ZADT_VSP")
-    assert not runtime.is_local("ZS4INTCPQ")
+    assert not runtime.is_local("ZEXAMPLE_SUITE")
 
 
 def test_only_tmp_counts_as_shared():
     assert runtime.is_shared("$TMP")
     assert runtime.is_shared("$tmp")
     assert not runtime.is_shared("$ZADT_VSP")
-    assert not runtime.is_shared("ZS4INTCPQ")
+    assert not runtime.is_shared("ZEXAMPLE_SUITE")

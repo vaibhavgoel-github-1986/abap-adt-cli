@@ -6,11 +6,11 @@ from adt_cli import cts
 from adt_cli.errors import ConfigError, ConflictError
 from adt_cli.repository import RepoObject
 
-HELD = cts.Holder(request="DHAK900123", owner="BOB", text="work", tasks=(("DHAK900124", "ANN"),))
+HELD = cts.Holder(request="DEVK900123", owner="BOB", text="work", tasks=(("DEVK900124", "ANN"),))
 
 
 def test_normalise_request_accepts_a_real_id():
-    assert cts.normalise_request(" dhak900123 ") == "DHAK900123"
+    assert cts.normalise_request(" devk900123 ") == "DEVK900123"
 
 
 def test_normalise_request_rejects_nonsense():
@@ -19,28 +19,28 @@ def test_normalise_request_rejects_nonsense():
 
 
 def test_holder_accepts_its_own_request_and_tasks():
-    assert HELD.accepts("dhak900123")
-    assert HELD.accepts("DHAK900124")
-    assert not HELD.accepts("DHAK900999")
+    assert HELD.accepts("devk900123")
+    assert HELD.accepts("DEVK900124")
+    assert not HELD.accepts("DEVK900999")
 
 
 def test_reconcile_adopts_the_request_that_already_holds_the_objects():
     plan = cts.reconcile(
         ["src/a.abap"], [HELD], requested="", package="ZTEST", user="ANN"
     )
-    assert plan.request == "DHAK900123"
-    assert any("DHAK900124" in note for note in plan.notes)
+    assert plan.request == "DEVK900123"
+    assert any("DEVK900124" in note for note in plan.notes)
 
 
 def test_reconcile_refuses_a_transport_that_clashes():
     with pytest.raises(ConflictError, match="already locked"):
         cts.reconcile(
-            ["src/a.abap"], [HELD], requested="DHAK900999", package="ZTEST", user="ANN"
+            ["src/a.abap"], [HELD], requested="DEVK900999", package="ZTEST", user="ANN"
         )
 
 
 def test_reconcile_refuses_objects_spread_over_several_requests():
-    other = cts.Holder(request="DHAK900500", owner="ANN", text="")
+    other = cts.Holder(request="DEVK900500", owner="ANN", text="")
     with pytest.raises(ConflictError, match="several"):
         cts.reconcile(
             ["src/a.abap", "src/b.abap"],
