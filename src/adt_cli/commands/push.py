@@ -157,9 +157,14 @@ async def _create(
             transport=transport,
         )
         obj = repository.RepoObject(name=name, type_code=kind.code, uri=uri)
-        await repository.write_source(adt, obj, text, transport=transport)
+        part = space.part_for(local)
+        await repository.write_source(adt, obj, text, part=part, transport=transport)
         space.files[local] = workspace.Entry(
-            name=name, type_code=kind.code, uri=uri, sha256=workspace.sha256(text)
+            name=name,
+            type_code=kind.code,
+            uri=uri,
+            sha256=workspace.sha256(text),
+            part=part.path if part else "",
         )
         space.save()
         created.append(obj)
@@ -174,14 +179,20 @@ async def _upload(
     for local in modified:
         obj = space.object_for(local)
         text = space.read(local)
-        await repository.write_source(adt, obj, text, transport=transport)
+        await repository.write_source(
+            adt, obj, text, part=space.part_for(local), transport=transport
+        )
         # Re-baseline as we go: a later failure must not make an already pushed
         # object look unpushed.
         space.files[local].sha256 = workspace.sha256(text)
         space.save()
         pushed.append(obj)
-        ui.console.print(f"  [green]pushed[/] {obj.name}")
-    return pushed
+        ui.console.print(f"  [green]pushed[/] {local}")
+    # One activation entry per object, so a class edited in three files runs once.
+    unique: dict[str, repository.RepoObject] = {}
+    for obj in pushed:
+        unique.setdefault(obj.uri, obj)
+    return list(unique.values())
 
 
 def _report_activation(outcome: activation.Outcome, count: int, system: str) -> bool:

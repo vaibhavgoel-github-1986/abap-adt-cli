@@ -4,12 +4,18 @@ import json
 
 import pytest
 
+from adt_cli import objects
 from adt_cli.errors import WorkspaceError
 from adt_cli.repository import RepoObject
 from adt_cli.workspace import Workspace, sha256
 
 
 def _space(tmp_path) -> Workspace:
+    # Flat layout keeps these assertions about scanning, not about folder shape.
+    return Workspace(root=tmp_path, package="ZTEST", system="dev-100", se80=False)
+
+
+def _se80(tmp_path) -> Workspace:
     return Workspace(root=tmp_path, package="ZTEST", system="dev-100")
 
 
@@ -85,3 +91,40 @@ def test_non_utf8_file_is_reported(tmp_path):
 def test_untracked_object_is_reported(tmp_path):
     with pytest.raises(WorkspaceError, match="not tracked"):
         _space(tmp_path).object_for("src/nope.abap")
+
+
+def test_se80_is_the_default_layout(tmp_path):
+    assert Workspace(root=tmp_path).se80 is True
+
+
+def test_se80_clubs_every_part_of_an_object_in_one_folder(tmp_path):
+    space = _se80(tmp_path)
+    obj = RepoObject("ZCL_A", "CLAS/OC", "/sap/bc/adt/oo/classes/zcl_a")
+    kind = objects.lookup("CLAS/OC")
+
+    main = space.write(obj, "x", kind.parts[0])
+    tests = space.write(obj, "y", kind.parts[4])
+
+    assert main == "Class Library/Classes/ZCL_A/zcl_a.clas.abap"
+    assert tests == "Class Library/Classes/ZCL_A/zcl_a.clas.testclasses.abap"
+
+
+def test_function_group_children_land_beside_their_group(tmp_path):
+    space = _se80(tmp_path)
+    group = RepoObject("ZFG", "FUGR/F", "/sap/bc/adt/functions/groups/zfg")
+    module = RepoObject(
+        "Z_FM_ONE", "FUGR/FF", "/sap/bc/adt/functions/groups/zfg/fmodules/z_fm_one"
+    )
+
+    assert space.local_path(group) == "Function Groups/ZFG/zfg.fugr.abap"
+    assert space.local_path(module) == "Function Groups/ZFG/z_fm_one.fugr.abap"
+
+
+def test_namespaced_names_stay_inside_the_workspace(tmp_path):
+    space = _se80(tmp_path)
+    obj = RepoObject("/NS/ZCL_A", "CLAS/OC", "/sap/bc/adt/oo/classes/%2fns%2fzcl_a")
+
+    local = space.local_path(obj)
+
+    assert ".." not in local
+    assert local == "Class Library/Classes/#NS#ZCL_A/#ns#zcl_a.clas.abap"

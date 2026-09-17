@@ -10,7 +10,7 @@ from typing import Annotated
 
 import typer
 
-from adt_cli import cts, repository, runtime, transports, ui, workspace
+from adt_cli import cts, repository, runtime, transports, ui
 from adt_cli.commands.options import DestOpt, TraceOpt
 from adt_cli.errors import AbapCliError
 from adt_cli.workspace import Workspace

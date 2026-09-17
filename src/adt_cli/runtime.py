@@ -114,8 +114,10 @@ async def remote_drift(
     targets = [local for local in locals_ if space.writable(local)]
     if not targets:
         return [], []
-    results = await repository.fetch_sources(
-        adt, [space.object_for(local) for local in targets], concurrency=jobs
+    results = await repository.fetch_parts(
+        adt,
+        [(space.object_for(local), space.part_for(local)) for local in targets],
+        concurrency=jobs,
     )
     drifted, unreadable = [], []
     for local, result in zip(targets, results, strict=True):

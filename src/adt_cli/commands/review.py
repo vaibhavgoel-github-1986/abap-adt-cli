@@ -105,8 +105,10 @@ def diff(
 
     async def body() -> list[repository.Fetched]:
         async with runtime.session(target, password, jobs) as adt:
-            return await repository.fetch_sources(
-                adt, [space.object_for(local) for local in present], concurrency=jobs
+            return await repository.fetch_parts(
+                adt,
+                [(space.object_for(local), space.part_for(local)) for local in present],
+                concurrency=jobs,
             )
 
     results = runtime.run(body)

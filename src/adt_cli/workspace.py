@@ -49,6 +49,8 @@ class Entry:
     type_code: str
     uri: str
     sha256: str
+    # URI segment of the editable text this file holds, '' for the main source.
+    part: str = ""
 
 
 @dataclass
@@ -57,7 +59,7 @@ class Workspace:
     package: str = ""
     system: str = ""
     pulled_at: str = ""
-    se80: bool = False
+    se80: bool = True
     match: str = ""
     types: list[str] = field(default_factory=list)
     owner: str = ""
@@ -93,7 +95,7 @@ class Workspace:
             package=str(raw.get("package", "")),
             system=str(raw.get("system", "")),
             pulled_at=str(raw.get("pulled_at", "")),
-            se80=bool(raw.get("se80", False)),
+            se80=bool(raw.get("se80", True)),
             match=str(raw.get("match", "")),
             types=[str(entry) for entry in raw.get("types", [])],
             owner=str(raw.get("owner", "")),
@@ -124,6 +126,7 @@ class Workspace:
                         "type": entry.type_code,
                         "uri": entry.uri,
                         "sha256": entry.sha256,
+                        "part": entry.part,
                     }
                     for local, entry in sorted(self.files.items())
                 },
@@ -149,10 +152,11 @@ class Workspace:
 
     # ------------------------------------------------------------------ layout
 
-    def local_path(self, obj: RepoObject) -> str:
+    def local_path(self, obj: RepoObject, part: objects.Part | None = None) -> str:
+        filename = obj.filename_for(part.suffix) if part else obj.filename
         if self.se80:
-            return f"{obj.kind.folder}/{obj.filename}"
-        return f"src/{obj.filename}"
+            return f"{obj.kind.folder}/{obj.folder_name}/{filename}"
+        return f"src/{filename}"
 
     def resolve(self, local: str) -> Path:
         """Absolute path of a tracked file, refusing anything outside the root.
@@ -166,8 +170,8 @@ class Workspace:
             raise WorkspaceError(f"manifest entry '{local}' points outside {root}")
         return candidate
 
-    def write(self, obj: RepoObject, text: str) -> str:
-        local = self.local_path(obj)
+    def write(self, obj: RepoObject, text: str, part: objects.Part | None = None) -> str:
+        local = self.local_path(obj, part)
         target = self.resolve(local)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +179,11 @@ class Workspace:
         except OSError as exc:
             raise WorkspaceError(f"cannot write {target}: {exc}") from exc
         self.files[local] = Entry(
-            name=obj.name, type_code=obj.type_code, uri=obj.uri, sha256=sha256(text)
+            name=obj.name,
+            type_code=obj.type_code,
+            uri=obj.uri,
+            sha256=sha256(text),
+            part=part.path if part else "",
         )
         return local
 
@@ -217,6 +225,23 @@ class Workspace:
             raise WorkspaceError(f"'{local}' is not tracked by this workspace") from exc
         return RepoObject(name=entry.name, type_code=entry.type_code, uri=entry.uri)
 
+    def part_for(self, local: str) -> objects.Part | None:
+        """Which editable text a tracked file writes back to."""
+        entry = self.files.get(local)
+        if entry is None:
+            found = objects.part_for_file(local)
+            return found[1] if found else None
+        if not entry.part:
+            return objects.lookup(entry.type_code).main
+        return next(
+            (
+                part
+                for part in objects.lookup(entry.type_code).parts
+                if part.path == entry.part
+            ),
+            None,
+        )
+
     def writable(self, local: str) -> bool:
         return local in self.files and objects.lookup(self.files[local].type_code).writable
 
@@ -234,6 +259,7 @@ def _load_entries(raw: object, source: Path) -> dict[str, Entry]:
                 type_code=str(meta["type"]),
                 uri=str(meta["uri"]),
                 sha256=str(meta["sha256"]),
+                part=str(meta.get("part", "")),
             )
         except KeyError as exc:
             raise WorkspaceError(f"{source}: entry '{local}' is missing {exc}") from exc

@@ -15,7 +15,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from adt_cli import repository, runtime, ui
+from adt_cli import expand, repository, runtime, ui
 from adt_cli.commands.options import DestOpt, JobsOpt, PackageArg, SystemOpt, TraceOpt
 from adt_cli.errors import AbapCliError, WorkspaceError
 from adt_cli.workspace import Workspace
@@ -37,7 +37,11 @@ def pull(
     system: SystemOpt = "",
     dest: DestOpt = None,
     se80: Annotated[
-        bool | None, typer.Option("--se80/--flat", help="Lay files out as an SE80 tree.")
+        bool | None,
+        typer.Option(
+            "--se80/--flat",
+            help="SE80 folder tree (default), or one flat src/ folder.",
+        ),
     ] = None,
     jobs: JobsOpt = 16,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite local changes.")] = False,
@@ -72,7 +76,8 @@ def pull(
     if previous.exists and not force:
         _refuse_to_discard(previous)
 
-    layout_se80 = previous.se80 if se80 is None else se80
+    # A refresh keeps the layout it was pulled with; a fresh pull defaults to SE80.
+    layout_se80 = (previous.se80 if previous.exists else True) if se80 is None else se80
     # A refresh keeps whatever narrowed the original pull, so it cannot silently widen.
     pattern = match or previous.match
     wanted = parse_types(types) or previous.types
@@ -87,7 +92,7 @@ def pull(
 
     started = time.perf_counter()
 
-    async def body() -> tuple[Workspace, list[repository.Fetched]]:
+    async def body() -> tuple[Workspace, list[repository.Fetched], int]:
         async with runtime.session(target, password, jobs) as adt:
             scope = f" owned by {owner_filter}" if owner_filter else ""
             ui.console.print(f"[dim]connected to {target.name}, listing {package}{scope}...[/]")
@@ -98,6 +103,11 @@ def pull(
                 found = [obj for obj in found if wanted_type(obj.type_code, wanted)]
             if not found:
                 raise AbapCliError(f"nothing in {package.upper()} matched")
+            # Function groups only name themselves; their includes and function
+            # modules are separate ADT objects that have to be resolved first.
+            found = await expand.expand(adt, found, concurrency=jobs)
+            reachable = [obj for obj in found if repository.is_adt_resource(obj)]
+            elsewhere = len(found) - len(reachable)
             space = Workspace(
                 root=root,
                 package=package.upper(),
@@ -107,26 +117,38 @@ def pull(
                 types=wanted,
                 owner=owner,
             )
-            results = await _fetch_with_progress(adt, found, jobs)
+            results = await _fetch_with_progress(adt, reachable, jobs)
             for result in results:
-                if result.ok:
-                    space.write(result.obj, result.text)
+                if result.ok and not result.absent:
+                    space.write(result.obj, result.text, result.part)
             space.save()
-            return space, results
+            return space, results, elsewhere
 
-    space, results = runtime.run(body)
+    space, results, elsewhere = runtime.run(body)
 
     elapsed = time.perf_counter() - started
-    written = [result for result in results if result.ok]
+    written = [result for result in results if result.ok and not result.absent]
     failed = [result for result in results if not result.ok]
+    # An object ADT lists but cannot serve, such as a Gateway Service Builder project.
+    unserved = {
+        (result.obj.type_code, result.obj.name)
+        for result in results
+        if result.absent and result.part is None
+    }
     total = sum(len(result.text) for result in written)
+    objects = len({(result.obj.type_code, result.obj.name) for result in written})
     ui.console.print(
         f"pulled [bold]{space.package}[/] from [bold]{target.name}[/] "
-        f"- {len(written)} objects, {total:,} bytes in {elapsed:.1f}s"
+        f"- {objects} objects in {len(written)} files, {total:,} bytes in {elapsed:.1f}s"
     )
     ui.console.print(f"[dim]{root}[/]")
     if dest:
         runtime.add_to_vscode(root)
+    if elsewhere or unserved:
+        ui.console.print(
+            f"[dim]{elsewhere + len(unserved)} object(s) have no ADT representation "
+            "and were skipped[/]"
+        )
     if failed:
         ui.console.print(f"[dim]{len(failed)} object(s) failed to pull[/]")
 
@@ -154,12 +176,14 @@ async def _fetch_with_progress(adt, found, jobs: int) -> list[repository.Fetched
         TimeElapsedColumn(),
         console=ui.console,
     ) as progress:
-        task = progress.add_task(f"pulling {len(found)} objects", total=len(found))
+        # One request per editable part, so a class counts for five.
+        requests = sum(len(obj.kind.parts) if obj.kind.is_source else 1 for obj in found)
+        task = progress.add_task(f"pulling {len(found)} objects", total=requests)
 
         def on_progress(result: repository.Fetched) -> None:
             progress.advance(task)
             if not result.ok:
-                progress.console.print(f"  [red]![/]  {result.obj.name}: {result.error}")
+                progress.console.print(f"  [red]![/]  {result.label}: {result.error}")
 
         return await repository.fetch_sources(
             adt, found, concurrency=jobs, on_progress=on_progress

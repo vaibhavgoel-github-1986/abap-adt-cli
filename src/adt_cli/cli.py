@@ -10,7 +10,7 @@ from typing import Annotated
 
 import typer
 
-from adt_cli import __version__, release, runtime, ui
+from adt_cli import release, runtime, ui
 from adt_cli.commands import objects_cmd, profiles, release_cmd, review
 from adt_cli.commands import pull as pull_cmd
 from adt_cli.commands import push as push_cmd
