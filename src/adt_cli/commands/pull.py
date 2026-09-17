@@ -50,7 +50,7 @@ def pull(
             help="Also pull the packages below this one (default), or this one alone.",
         ),
     ] = None,
-    jobs: JobsOpt = 16,
+    jobs: JobsOpt = 30,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite local changes.")] = False,
     match: Annotated[
         str, typer.Option("--match", "-m", help="Object name pattern, e.g. 'ZCL_SUBS*'.")

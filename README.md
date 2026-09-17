@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.2.0"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.2.1"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -299,7 +299,7 @@ overwriting your work. `--force` discards local changes and re-downloads.
 | `--user` / `-u` | object owner; defaults to you for `$` packages, `'*'` means everyone |
 | `--se80` / `--flat` | SE80 object tree (default), or one flat `src/` folder; a refresh keeps whatever the manifest recorded |
 | `--subpackages` / `--no-subpackages` | descend the package hierarchy (default), or take the named package alone |
-| `--jobs` / `-j` | parallel requests, default 16 |
+| `--jobs` / `-j` | parallel requests, default 30 |
 | `--force` / `-f` | discard local modifications and overwrite |
 | `--system` / `-s` | pull from a system other than the default, or the one recorded in the manifest |
 
@@ -1356,8 +1356,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.2.0"
-git tag v1.2.0
+git commit -am "release 1.2.1"
+git tag v1.2.1
 git push && git push --tags
 ```
 
