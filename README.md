@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.5.2"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.0"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -229,6 +229,7 @@ abap --trace push --transport DEVK900123
 | [`abap transport TR list`](#abap-transport) | what a request contains |
 | [`abap transport TR add NAME...`](#abap-transport) | add objects, whole or method-level |
 | [`abap transport TR remove NAME...`](#abap-transport) | remove objects from a request |
+| [`abap api METHOD SERVICE ENTITY`](#abap-api) | call an OData service on the system |
 | [`abap version`](#abap-version-abap-update) | which version is installed, and how |
 | [`abap update`](#abap-version-abap-update) | install the newest published release |
 
@@ -298,6 +299,12 @@ Full detail: [Transports](#transports).
 Inspect a request, or move objects in and out of it. `list` prints the exact
 `PGMID:TYPE:NAME` form that `add` and `remove` accept.
 Full detail: [Transports](#transports).
+
+#### `abap api`
+
+Call any OData service the system publishes, reusing your ADT logon. v2 Gateway
+and v4 RAP, any HTTP method, `$metadata` included.
+Full detail: [Calling an OData service](#calling-an-odata-service).
 
 #### `abap version`, `abap update`
 
@@ -905,8 +912,102 @@ request is reported as a failure instead of a success.
 Removing an object's only entry releases its lock, which is how you hand a class
 back without releasing the whole request.
 
-## Object types
+## Calling an OData service
 
+`abap api` sends a request to any OData service the system publishes, over the
+session you are already authenticated on. No separate logon, no second set of
+credentials, and `--trace` shows the exchange like every other request.
+
+```console
+$ abap api GET ZSD_EXAMPLE_API Items -n ZSB_EXAMPLE_API -q '$top=2'
+{
+  "@odata.context": "$metadata#Items",
+  "value": [
+    { "name": "FIRST", "type": "P", "low": "20210907" },
+    { "name": "SECOND", "type": "P", "low": "20240101" }
+  ]
+}
+
+200 - 2 row(s)
+```
+
+| Argument | |
+| --- | --- |
+| `METHOD` | `GET` (default), `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` |
+| `SERVICE` | the service definition, e.g. `ZSD_EXAMPLE_API` |
+| `ENTITY` | entity set or path, e.g. `Items` or `Items('X')/Details` |
+
+| Option | Effect |
+| --- | --- |
+| `--namespace` / `-n` | the **service binding** for a v4 service, usually `ZSB_*` |
+| `--v2` | a Gateway service rather than a RAP one |
+| `--query` / `-q` | one query option, e.g. `'$top=10'`. Repeatable |
+| `--body` / `-b` | JSON for a write, inline or `@file.json` |
+| `--metadata` | fetch `$metadata` instead of calling an entity |
+| `--raw` | print the response verbatim instead of pretty-printing |
+
+### Which name goes where
+
+This is the part that catches people out. A **v4** service is published under its
+*binding*, not its definition, and the two are different objects:
+
+```
+/sap/opu/odata4/sap/<binding>/srvd_a2x/sap/<service>/0001/<entity>
+```
+
+So `-n` takes the `SRVB/SVB` object and the positional argument takes the
+`SRVD/SRV` one. When they have the same name, `-n` can be left out. A **v2**
+service has no binding and sits at a flatter path, so `--v2` plus the service
+name is all it needs:
+
+```
+/sap/opu/odata/sap/<SERVICE>/<entity>
+```
+
+`abap transports` will not help you find these — use `abap pull` on the package,
+or Eclipse, to see which `SRVB/SVB` belongs to which `SRVD/SRV`.
+
+### Reading the service first
+
+`--metadata` returns the EDMX document, which is the authoritative list of entity
+sets and their fields — worth checking before guessing a filter:
+
+```bash
+abap api GET ZSD_EXAMPLE_API --metadata -n ZSB_EXAMPLE_API
+```
+
+### Writes
+
+`POST`, `PUT`, `PATCH` and `DELETE` fetch a CSRF token from the service before
+sending. That extra round trip is not optional: Gateway issues tokens per
+service and rejects the one ADT handed out at logon.
+
+```bash
+abap api POST ZSD_EXAMPLE_API Items -b '{"name":"NEW","type":"P"}'
+abap api PATCH ZSD_EXAMPLE_API "Items('NEW')" -b @change.json
+abap api DELETE ZSD_EXAMPLE_API "Items('NEW')"
+```
+
+A body on a `GET` is refused before anything is sent, as is a malformed one —
+`-b` is parsed locally first, so a typo costs no round trip.
+
+### Errors
+
+The service's own message is what you see, not the status code. A RAP handler
+that rejects a call explains why:
+
+```console
+$ abap api GET ZSD_EXAMPLE_API Items -n ZSB_EXAMPLE_API
+error No filters were provided
+
+$ abap api GET ZSD_EXAMPLE_API Items -n ZSB_EXAMPLE_API -q "\$filter=Nope eq '1'"
+error Invalid token 'Nope' at position '1'
+```
+
+Both dialects are unwrapped: v4 carries the text directly, v2 nests it under
+`message.value`. Without that you would get `HTTP 500` and nothing else.
+
+## Object types
 `abap` pulls exactly what it can push back. A type earns its place by having
 something ADT will accept a write for; anything else is skipped rather than
 downloaded as read-only metadata you would only discover was read-only when the
@@ -1250,7 +1351,8 @@ they are one-off setup steps rather than part of the edit cycle:
 | TVARVC entries, client copies | SAP GUI or an MCP server |
 
 Everything else — pulling, editing, diffing, pushing, activating, adding to and
-removing from a transport, deleting objects — is `abap`.
+removing from a transport, deleting objects, calling an OData service — is
+`abap`.
 
 Run `abap types` to see exactly which object types the installed build handles;
 it reads the same registry the pull and push use, so it cannot drift from the
@@ -1505,8 +1607,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.5.2"
-git tag v1.5.2
+git commit -am "release 1.6.0"
+git tag v1.6.0
 git push && git push --tags
 ```
 

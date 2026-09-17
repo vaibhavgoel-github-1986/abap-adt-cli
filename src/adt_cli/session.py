@@ -295,12 +295,15 @@ class AdtSession:
         content: str | bytes | None = None,
         params: dict[str, Any] | None = None,
         allow: tuple[int, ...] = (200, 201, 202),
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        reply = await self._attempt(method, uri, accept, content_type, content, params)
+        reply = await self._attempt(method, uri, accept, content_type, content, params, headers)
         # A stale CSRF token is reported as 403; refresh once and retry.
         if _is_csrf_failure(reply):
             await self.connect()
-            reply = await self._attempt(method, uri, accept, content_type, content, params)
+            reply = await self._attempt(
+                method, uri, accept, content_type, content, params, headers
+            )
         if reply.status_code not in allow:
             raise AdtError(_explain(reply), reply.status_code, reply.text)
         return reply
@@ -313,12 +316,13 @@ class AdtSession:
         content_type: str | None,
         content: str | bytes | None,
         params: dict[str, Any] | None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         async with self._gate:
             request = self._client.build_request(
                 method,
                 uri,
-                headers=self._headers(accept, content_type),
+                headers={**self._headers(accept, content_type), **(headers or {})},
                 content=content,
                 params=params,
             )

@@ -11,7 +11,14 @@ from typing import Annotated
 import typer
 
 from adt_cli import release, runtime, ui
-from adt_cli.commands import objects_cmd, profiles, release_cmd, review, transports_cmd
+from adt_cli.commands import (
+    api_cmd,
+    objects_cmd,
+    profiles,
+    release_cmd,
+    review,
+    transports_cmd,
+)
 from adt_cli.commands import pull as pull_cmd
 from adt_cli.commands import push as push_cmd
 from adt_cli.commands.options import TraceOpt
@@ -63,4 +70,5 @@ app.command()(objects_cmd.types)
 app.command()(objects_cmd.delete)
 app.command()(objects_cmd.transport)
 app.command("transports")(transports_cmd.transports_)
+app.command()(api_cmd.api)
 app.command()(release_cmd.update)
