@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.1.1"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.2.0"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -176,6 +176,8 @@ abap --trace push --transport DHAK900123
 | [`abap push`](#abap-push) | upload changed objects |
 | [`abap push --activate`](#abap-push) | ...and activate just those objects afterwards |
 | [`abap delete NAME...`](#abap-delete) | delete objects from SAP and the workspace |
+| [`abap transports`](#abap-transports) | every request you own, filtered by status and category |
+| [`abap transports new "DESC"`](#abap-transports) | create a request |
 | [`abap transport TR list`](#abap-transport) | what a request contains |
 | [`abap transport TR add NAME...`](#abap-transport) | add objects, whole or method-level |
 | [`abap transport TR remove NAME...`](#abap-transport) | remove objects from a request |
@@ -235,6 +237,12 @@ Full detail: [Pushing](#pushing) and [Activating](#activating).
 Removes objects from SAP and from the workspace. The one irreversible command, so
 it confirms first and only accepts objects the workspace already tracks.
 Full detail: [Deleting](#deleting).
+
+#### `abap transports`
+
+Every request you own, split into workbench and customizing, modifiable and
+released, with a filter for each. `new` creates one from a description.
+Full detail: [Transports](#transports).
 
 #### `abap transport`
 
@@ -621,6 +629,60 @@ error only objects tracked by the workspace can be deleted - re-pull first
 ```
 
 ## Transports
+
+`abap transports` is SE09 without the GUI, and `abap transport` works on a
+single request.
+
+### Listing what you own
+
+```console
+$ abap transports --unreleased
+workbench / modifiable
+  DHAK907310  O2CSM-33904 Get Subs API V2 - snapshot buffer
+      task DHAK907311  VAIBHAGO
+
+customizing / modifiable
+  DHAK907094  BIL_O2CSM-33711 Usage Anomaly Detection
+      task DHAK907095  VAIBHAGO
+
+2 request(s)
+```
+
+Filters come in pairs, and passing neither of a pair — or both — means no
+narrowing at all:
+
+| Option | Effect |
+| --- | --- |
+| `--released` / `--unreleased` | only released, or only what you can still change |
+| `--workbench` / `--customizing` | only that category |
+| `--user` / `-u` | somebody else's requests; `'*'` is everybody |
+| `--objects` | also list the objects inside each request |
+| `--system` / `-s` | a system other than the workspace's |
+
+Status is filtered by SAP, category by the CLI. That split is not arbitrary:
+the tree endpoint defaults `requestStatus` to *released*, so asking for
+everything is genuinely two queries, while the section a request is filed under
+is what the tree is authoritative about — a request whose `tm:type` disagrees
+with its folder is still in that folder.
+
+### Creating one
+
+```console
+$ abap transports new 'O2CSM-33904 Get Subs API V2 - snapshot buffer'
+created DHAK907310  O2CSM-33904 Get Subs API V2 - snapshot buffer
+  task DHAK907311  VAIBHAGO
+abap push --transport DHAK907310
+```
+
+`--customizing` makes a type `W` request instead of type `K`. The transport
+target is left to SAP unless `--target` says otherwise, so the transport layer
+of the package decides where the request goes rather than a guess made here.
+
+Descriptions are checked against SAP's 60-character limit before anything is
+sent, because a request created with a truncated description has to be deleted
+and remade.
+
+### Working on one request
 
 `abap transport` inspects a request, and adds or removes objects in it:
 
@@ -1294,8 +1356,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.1.1"
-git tag v1.1.1
+git commit -am "release 1.2.0"
+git tag v1.2.0
 git push && git push --tags
 ```
 
