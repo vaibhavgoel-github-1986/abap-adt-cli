@@ -102,15 +102,14 @@ def api(
 
 
 def _report(status: int, answer: object, raw: bool) -> None:
+    # Status and counts go to stderr so stdout is only ever the payload.
     if answer is None:
-        ui.console.print(f"[green]{status}[/] [dim]no content[/]")
+        ui.err_console.print(f"[green]{status}[/] [dim]no content[/]")
         return
     if raw or isinstance(answer, str):
         ui.raw(answer if isinstance(answer, str) else json.dumps(answer))
         return
     ui.console.print_json(json.dumps(answer))
     found = odata.rows(answer)
-    if found is not None:
-        ui.console.print(f"\n[dim]{status} - {len(found)} row(s)[/]")
-    else:
-        ui.console.print(f"\n[dim]{status}[/]")
+    detail = f" - {len(found)} row(s)" if found is not None else ""
+    ui.err_console.print(f"[dim]{status}{detail}[/]")

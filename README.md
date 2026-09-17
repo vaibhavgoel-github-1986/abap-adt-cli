@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.1"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.2"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -946,6 +946,19 @@ $ abap api GET ZSD_EXAMPLE_API Items -n ZSB_EXAMPLE_API -q '$top=2'
 | `--metadata` | fetch `$metadata` instead of calling an entity |
 | `--raw` | print the response verbatim instead of pretty-printing |
 
+Every operation is one command, and the shape is always the same — method,
+service, entity:
+
+| Operation | Command |
+| --- | --- |
+| read a collection | `abap api GET SRV Items -q '$top=10'` |
+| read one entity | `abap api GET SRV "Items('ABC')"` |
+| read the contract | `abap api GET SRV --metadata` |
+| create | `abap api POST SRV Items -b '{"name":"X"}'` |
+| update some fields | `abap api PATCH SRV "Items('ABC')" -b '{"low":"1"}'` |
+| replace an entity | `abap api PUT SRV "Items('ABC')" -b @full.json` |
+| delete | `abap api DELETE SRV "Items('ABC')"` |
+
 ### Which name goes where
 
 This is the part that catches people out. A **v4** service is published under its
@@ -987,14 +1000,102 @@ parses.
 sending. That extra round trip is not optional: Gateway issues tokens per
 service and rejects the one ADT handed out at logon.
 
+**Create.** The body is JSON, inline or `@file`:
+
+```console
+$ abap api POST ZSD_EXAMPLE_API Items -b '{"name":"Z_MY_VAR","type":"S","opti":"EQ","low":"ALPHA"}'
+{
+  "name": "Z_MY_VAR", "type": "S", "numb": "0",
+  "sign": "I", "opti": "EQ", "low": "ALPHA", "high": ""
+}
+201
+```
+
+A managed RAP service often fills keys for you — read them back out of the
+response rather than assuming what was assigned.
+
+**Update one entity**, addressed by its key predicate. Send only the fields that
+change; the rest are preserved:
+
 ```bash
-abap api POST ZSD_EXAMPLE_API Items -b '{"name":"NEW","type":"P"}'
-abap api PATCH ZSD_EXAMPLE_API "Items('NEW')" -b @change.json
-abap api DELETE ZSD_EXAMPLE_API "Items('NEW')"
+abap api PATCH ZSD_EXAMPLE_API "Items(name='Z_MY_VAR',type='S',numb='1')" -b '{"low":"1500","high":"2500"}'
+abap api PATCH ZSD_EXAMPLE_API "Items(name='Z_MY_VAR',type='S',numb='1')" -b @change.json
+```
+
+**Delete** answers `204` with no body:
+
+```console
+$ abap api DELETE ZSD_EXAMPLE_API "Items(name='Z_MY_VAR',type='S',numb='1')"
+204 no content
 ```
 
 A body on a `GET` is refused before anything is sent, as is a malformed one —
 `-b` is parsed locally first, so a typo costs no round trip.
+
+### Key predicates
+
+Anything after the entity set is passed through untouched, so the full OData
+addressing syntax works. **Quote the whole argument** — the parentheses and
+single quotes are shell metacharacters:
+
+| Goal | `ENTITY` argument |
+| --- | --- |
+| a collection | `Items` |
+| one entity, single key | `"Items('ABC')"` |
+| one entity, compound key | `"Items(name='Z_VAR',type='S',numb='1')"` |
+| a navigation property | `"Items('ABC')/_Details"` |
+
+A key value SAP returns unpadded (`"1"`) must be used unpadded in the predicate,
+even where the field is `NUMC` and you supplied `"0001"` on create.
+
+### Query recipes
+
+`-q` is repeatable and each option is passed verbatim, so anything the service
+supports works. Escape `$` in double quotes, or use single quotes, so the shell
+does not expand it:
+
+```bash
+# filter, sort, project, page
+abap api GET ZSD_EXAMPLE_API Items -q "\$filter=name eq 'Z_VAR' and type eq 'S'" \
+                                   -q '$orderby=numb' -q '$select=numb,low,high' -q '$top=20'
+
+# highest counter: sort descending and take one
+abap api GET ZSD_EXAMPLE_API Items -q "\$filter=name eq 'Z_VAR'" -q '$orderby=numb desc' -q '$top=1'
+
+# prefix search
+abap api GET ZSD_EXAMPLE_API Items -q "\$filter=startswith(name,'Z_MY')"
+
+# every navigation property in one call
+abap api GET ZSD_EXAMPLE_API Items -q "\$filter=Product eq 'ABC'" -q '$expand=*' -q '$top=20'
+
+# a named expand, and paging past a row the service chokes on
+abap api GET ZSD_EXAMPLE_API Items -q '$expand=_Details' -q '$skip=21' -q '$top=20'
+```
+
+`$expand=*` pulls every navigation property the entity declares — a single-valued
+one arrives as an object, a collection as an array:
+
+```json
+{
+  "IntObjNo": "921667",
+  "_Appoint": { "term_end_date": "2027-08-15" },
+  "_ConfigParams": [ { "ConfigName": "CHARGE_TYPE", "ConfigValue": "Recurring" } ]
+}
+```
+
+### Piping it somewhere
+
+Only the payload goes to stdout. The status line, row count and the TLS warning
+all go to stderr, so a pipe or redirect gets a clean document either way:
+
+```bash
+abap api GET ZSD_EXAMPLE_API Items -q '$top=50' | jq '.value[].name'
+abap api GET ZSD_EXAMPLE_API --metadata -n ZSB_EXAMPLE_API > service.xml
+abap api GET ZSD_EXAMPLE_API Items --raw > items.json
+```
+
+`--raw` prints compact JSON instead of the indented, coloured form — use it when
+a machine is reading, not a person.
 
 ### Errors
 
@@ -1011,6 +1112,12 @@ error Invalid token 'Nope' at position '1'
 
 Both dialects are unwrapped: v4 carries the text directly, v2 nests it under
 `message.value`. Without that you would get `HTTP 500` and nothing else.
+
+Not every failure is that clear, because not every service is. A missing entity
+may come back as `Unspecified provider error occurred`, and a duplicate key can
+surface as `ABAP Runtime error 'RAISE_SHORTDUMP'` — those are the server's words,
+passed through rather than dressed up. The command exits non-zero in every case,
+so a script stops.
 
 ## Object types
 `abap` pulls exactly what it can push back. A type earns its place by having
@@ -1612,8 +1719,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.6.1"
-git tag v1.6.1
+git commit -am "release 1.6.2"
+git tag v1.6.2
 git push && git push --tags
 ```
 
