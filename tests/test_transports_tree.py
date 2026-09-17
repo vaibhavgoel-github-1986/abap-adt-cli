@@ -5,8 +5,8 @@ from xml.etree import ElementTree
 import pytest
 
 from adt_cli import transports
-from adt_cli.commands.transports_cmd import _only, _wanted
-from adt_cli.errors import ConfigError
+from adt_cli.commands.transports_cmd import _only, _pair, _wanted
+from adt_cli.errors import AbapCliError, ConfigError
 
 TREE = """<?xml version="1.0" encoding="utf-8"?>
 <tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
@@ -115,3 +115,79 @@ async def test_a_description_is_required():
 async def test_an_over_long_description_is_refused_before_sending():
     with pytest.raises(ConfigError, match="at most 60"):
         await transports.create(_Session(), "x" * 61)
+
+
+REQUEST_DOC = """<?xml version="1.0" encoding="utf-8"?>
+<tm:root xmlns:tm="http://www.sap.com/cts/adt/tm">
+ <tm:request tm:number="DHAK900001">
+  <tm:attributes tm:attribute="Z_JIRA_US" tm:description="Jira User Story"
+    tm:value="O2CSM-1234" tm:position="000002"/>
+  <tm:attributes tm:attribute="Z_JIRA_DEPLOYMENT" tm:description="Deployment Jira US"
+    tm:value="O2CSM-9999" tm:position="000001"/>
+ </tm:request>
+</tm:root>
+"""
+
+CATALOGUE = """<?xml version="1.0" encoding="utf-8"?>
+<nameditem:namedItemList xmlns:nameditem="http://www.sap.com/adt/nameditem">
+ <nameditem:totalItemCount>2</nameditem:totalItemCount>
+ <nameditem:namedItem><nameditem:name>Z_JIRA_US</nameditem:name>
+  <nameditem:description>Jira User Story</nameditem:description>
+  <nameditem:data/></nameditem:namedItem>
+ <nameditem:namedItem><nameditem:name>GIT_BRANCH</nameditem:name>
+  <nameditem:description/><nameditem:data/></nameditem:namedItem>
+</nameditem:namedItemList>
+"""
+
+
+def test_attributes_come_back_in_position_order():
+    found = transports._parse_attributes(REQUEST_DOC)
+    assert [entry.name for entry in found] == ["Z_JIRA_DEPLOYMENT", "Z_JIRA_US"]
+    assert found[1].value == "O2CSM-1234"
+    assert found[1].position == "000002"
+    assert found[1].description == "Jira User Story"
+
+
+def test_a_new_attribute_is_sent_without_a_position():
+    payload = transports._attribute_payload(
+        "DHAK900001", "addattribute", transports.Attribute("Z_JIRA_US", "O2CSM-1")
+    )
+    assert 'tm:useraction="addattribute"' in payload
+    assert "tm:position" not in payload
+
+
+def test_an_existing_attribute_is_addressed_by_position():
+    payload = transports._attribute_payload(
+        "DHAK900001",
+        "modifyattribute",
+        transports.Attribute("Z_JIRA_US", "O2CSM-2", position="000002"),
+    )
+    assert 'tm:useraction="modifyattribute"' in payload
+    assert 'tm:position="000002"' in payload
+
+
+def test_the_catalogue_keeps_attributes_without_a_description():
+    root = ElementTree.fromstring(CATALOGUE)
+    assert root is not None  # the sample is well-formed XML
+    found = transports._NAMED_ITEM.findall(CATALOGUE)
+    names = [name.strip() for name, _ in found]
+    assert names == ["Z_JIRA_US", "GIT_BRANCH"]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("Z_JIRA_US=O2CSM-1234", ("Z_JIRA_US", "O2CSM-1234")),
+        ("z_jira_us = spaced ", ("Z_JIRA_US", "spaced")),
+        ("Z_X=a=b", ("Z_X", "a=b")),
+        ("Z_EMPTY=", ("Z_EMPTY", "")),
+    ],
+)
+def test_name_value_pairs_split_on_the_first_equals(token, expected):
+    assert _pair(token) == expected
+
+
+@pytest.mark.parametrize("token", ["Z_JIRA_US", "=value", ""])
+def test_a_malformed_pair_is_refused(token):
+    with pytest.raises(AbapCliError, match="NAME=VALUE"):
+        _pair(token)

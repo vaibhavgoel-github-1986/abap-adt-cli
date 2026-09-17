@@ -18,6 +18,9 @@ REQUESTS = "/sap/bc/adt/cts/transportrequests"
 ORGANIZER = "application/vnd.sap.adt.transportorganizer.v1+xml"
 # SE09's own tree: every request of a user, split by category and by status.
 TREE = "application/vnd.sap.adt.transportorganizertree.v1+xml"
+# Which attributes this system defines, with their descriptions.
+VALUE_HELP = f"{REQUESTS}/valuehelp/attribute"
+NAMED_ITEMS = "application/xml, application/vnd.sap.adt.nameditems.v1+xml"
 
 # tm:type on a request. SAP spells the two categories as single letters.
 WORKBENCH = "K"
@@ -32,7 +35,13 @@ DESCRIPTION_LIMIT = 60
 _OBJECT = re.compile(r"<tm:abap_object\b([^>]*)>")
 _TASK = re.compile(r"<tm:task\b([^>]*)>")
 _REQUEST = re.compile(r"<tm:request\b([^>]*)>")
+_ATTRIBUTE = re.compile(r"<tm:attributes\b([^>]*?)/?>")
 _ATTR = re.compile(r'tm:(\w+)="([^"]*)"')
+_NAMED_ITEM = re.compile(
+    r"<nameditem:name>(.*?)</nameditem:name>\s*"
+    r"(?:<nameditem:description>(.*?)</nameditem:description>)?",
+    re.S,
+)
 # Document order is what says which category and status a request sits under.
 _NODE = re.compile(
     r"<(/?)tm:(workbench|customizing|released|modifiable|request|task)\b([^>]*?)(/?)>"
@@ -61,6 +70,24 @@ class Task:
     number: str
     owner: str
     status: str
+
+
+@dataclass(frozen=True)
+class Attribute:
+    """One CTS attribute on a request, such as a Jira key.
+
+    ``position`` is how SAP addresses an existing attribute when changing it,
+    and it shifts as attributes come and go, so it is never cached.
+    """
+
+    name: str
+    value: str
+    position: str = ""
+    description: str = ""
+
+    def describe(self) -> str:
+        detail = f" ({self.description})" if self.description else ""
+        return f"{self.name}{detail} = {self.value}"
 
 
 @dataclass(frozen=True)
@@ -358,3 +385,97 @@ async def remove(
         await _apply(session, task, "removeobject", targets)
     remaining, _ = await read(session, task)
     return [entry for entry in remaining if entry.key in wanted]
+
+
+# --------------------------------------------------------------------- attributes
+
+
+def _parse_attributes(xml: str) -> list[Attribute]:
+    found = []
+    for fragment in _ATTRIBUTE.findall(xml):
+        fields = _attrs(fragment)
+        name = fields.get("attribute", "")
+        if name:
+            found.append(
+                Attribute(
+                    name=name,
+                    value=fields.get("value", ""),
+                    position=fields.get("position", ""),
+                    description=fields.get("description", ""),
+                )
+            )
+    return sorted(found, key=lambda entry: entry.position)
+
+
+async def attributes(session: AdtSession, number: str) -> list[Attribute]:
+    """The CTS attributes currently on a request."""
+    reply = await session.get(f"{REQUESTS}/{number.upper()}", accept=ORGANIZER)
+    return _parse_attributes(reply.text)
+
+
+async def attribute_names(session: AdtSession, pattern: str = "*") -> list[Attribute]:
+    """Attributes this system defines, which is what a request may carry.
+
+    Values are empty here: this is the catalogue, not what any request holds.
+    """
+    reply = await session.get(VALUE_HELP, params={"name": pattern}, accept=NAMED_ITEMS)
+    return [
+        Attribute(name=name.strip(), value="", description=(description or "").strip())
+        for name, description in _NAMED_ITEM.findall(reply.text)
+        if name.strip()
+    ]
+
+
+def _attribute_payload(number: str, action: str, attribute: Attribute) -> str:
+    position = (
+        f" tm:position={quoteattr(attribute.position)}" if attribute.position else ""
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<tm:root xmlns:tm="http://www.sap.com/cts/adt/tm" tm:number={quoteattr(number)}'
+        f' tm:useraction="{action}">'
+        "<tm:request>"
+        f"<tm:attributes tm:attribute={quoteattr(attribute.name)}"
+        f" tm:value={quoteattr(attribute.value)}{position}/>"
+        "</tm:request></tm:root>"
+    )
+
+
+async def set_attribute(session: AdtSession, number: str, name: str, value: str) -> Attribute:
+    """Put an attribute on a request, replacing the value if it is already there.
+
+    SAP has two actions, not one: ``addattribute`` for a name the request does
+    not carry yet, and ``modifyattribute`` for one it does - and the latter
+    identifies the attribute by position, not by name. Positions shift as
+    attributes are added, so the current list is read immediately before the
+    write rather than remembered.
+    """
+    number = number.upper()
+    wanted = name.strip().upper()
+    if not wanted:
+        raise ConfigError("an attribute needs a name")
+    present = await attributes(session, number)
+    existing = next((entry for entry in present if entry.name.upper() == wanted), None)
+    action = "modifyattribute" if existing else "addattribute"
+    target = Attribute(
+        name=existing.name if existing else wanted,
+        value=value,
+        position=existing.position if existing else "",
+    )
+    await session.request(
+        "PUT",
+        f"{REQUESTS}/{number}",
+        content=_attribute_payload(number, action, target),
+        content_type="text/plain",
+        accept=ORGANIZER,
+        allow=(200, 201, 202, 204),
+    )
+    # SAP answers 200 even when nothing was stored, so the result is read back.
+    after = await attributes(session, number)
+    landed = next((entry for entry in after if entry.name.upper() == wanted), None)
+    if landed is None or landed.value != value:
+        raise AdtError(
+            f"{number} did not accept {wanted} - is it a CTS attribute on this system? "
+            "'abap transports attr --names' lists the ones that are."
+        )
+    return landed

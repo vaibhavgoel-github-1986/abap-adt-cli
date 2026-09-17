@@ -59,7 +59,7 @@ pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.2.1"
+pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.3.0"
 ```
 
 Afterwards `abap update` keeps it current — see
@@ -178,6 +178,7 @@ abap --trace push --transport DHAK900123
 | [`abap delete NAME...`](#abap-delete) | delete objects from SAP and the workspace |
 | [`abap transports`](#abap-transports) | every request you own, filtered by status and category |
 | [`abap transports new "DESC"`](#abap-transports) | create a request |
+| [`abap transports attr TR NAME=VALUE`](#abap-transports) | show or set CTS attributes |
 | [`abap transport TR list`](#abap-transport) | what a request contains |
 | [`abap transport TR add NAME...`](#abap-transport) | add objects, whole or method-level |
 | [`abap transport TR remove NAME...`](#abap-transport) | remove objects from a request |
@@ -241,7 +242,8 @@ Full detail: [Deleting](#deleting).
 #### `abap transports`
 
 Every request you own, split into workbench and customizing, modifiable and
-released, with a filter for each. `new` creates one from a description.
+released, with a filter for each. `new` creates one from a description, and
+`attr` shows or sets its CTS attributes.
 Full detail: [Transports](#transports).
 
 #### `abap transport`
@@ -681,6 +683,59 @@ of the package decides where the request goes rather than a guess made here.
 Descriptions are checked against SAP's 60-character limit before anything is
 sent, because a request created with a truncated description has to be deleted
 and remade.
+
+### Attributes
+
+CTS attributes are the Jira keys and release markers your system defines on a
+request. `attr` shows them, and sets them:
+
+```console
+$ abap transports attr DHAK907312 Z_JIRA_US=O2CSM-1234
+  +  Z_JIRA_US (Jira User Story) = O2CSM-1234
+
+  Z_JIRA_FEATURE (Feature User Story) = O2CSM-5678
+  Z_JIRA_US (Jira User Story) = O2CSM-1234
+
+2 attribute(s) on DHAK907312
+```
+
+`--attr` / `-a` sets them at creation time, repeat it per attribute:
+
+```console
+$ abap transports new 'O2CSM-1234 fix' -a Z_JIRA_US=O2CSM-1234 -a Z_JIRA_FEATURE=O2CSM-5678
+created DHAK907312  O2CSM-1234 fix
+  task DHAK907313  VAIBHAGO
+  +  Z_JIRA_US (Jira User Story) = O2CSM-1234
+  +  Z_JIRA_FEATURE (Feature User Story) = O2CSM-5678
+```
+
+That is create-then-set, not one call: SAP has no way to carry attributes on the
+request that creates it, and sets them one at a time.
+
+`NAME=VALUE` splits on the *first* `=`, so a value may contain more of them.
+Setting a name the request already carries replaces its value rather than
+adding a second copy — SAP has two different actions for those cases
+(`addattribute` and `modifyattribute`), and the second addresses the attribute
+by *position*, not by name. Positions shift as attributes come and go, so the
+current list is read immediately before every write.
+
+`abap transports attr --names` lists what your system defines:
+
+```console
+$ abap transports attr --names
+  Z_JIRA_DEPLOYMENT  Deployment Jira US
+  Z_JIRA_FEATURE  Feature User Story
+  Z_JIRA_US  Jira User Story
+
+46 attribute(s) defined on this system
+```
+
+A name that is not one of them is refused by SAP rather than silently ignored:
+
+```console
+$ abap transports attr DHAK907312 Z_NOT_A_THING=x
+error Z_NOT_A_THING is not a valid attribute; enter a valid attribute
+```
 
 ### Working on one request
 
@@ -1356,8 +1411,8 @@ reads it from there through `[tool.hatch.version]`, so the two cannot drift.
 
 ```bash
 # bump __version__ in src/adt_cli/__init__.py, then
-git commit -am "release 1.2.1"
-git tag v1.2.1
+git commit -am "release 1.3.0"
+git tag v1.3.0
 git push && git push --tags
 ```
 
