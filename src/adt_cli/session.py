@@ -33,6 +33,10 @@ DISCOVERY = f"{ADT_ROOT}/discovery"
 REDACTED_HEADERS = frozenset({"authorization", "cookie", "set-cookie", "x-csrf-token"})
 
 DEFAULT_TIMEOUT = 120.0
+# The handshake doubles as a reachability check. A host that is only routable
+# through a VPN swallows the connection when the VPN is down, so waiting the
+# full request timeout for it is indistinguishable from a hang.
+HANDSHAKE_TIMEOUT = 5.0
 MAX_RETRIES = 2
 RETRY_BACKOFF = 0.5
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -94,9 +98,15 @@ def _is_tls_failure(exc: BaseException) -> bool:
     return "certificate" in str(exc).lower()
 
 
-def _transport_error(exc: Exception, host: str) -> AdtError:
+def _transport_error(exc: Exception, host: str, deadline: float = 0.0) -> AdtError:
     """Turn a connection-level failure into something the user can act on."""
     if isinstance(exc, httpx.TimeoutException):
+        if deadline:
+            return AdtError(
+                f"{host} did not answer within {deadline:.0f}s - it looks unreachable from "
+                "here. Check that the VPN is connected and that 'abap systems' has the "
+                "right host."
+            )
         return AdtError(f"{host} did not answer in time - the system may be busy or unreachable")
     if _is_tls_failure(exc):
         return AdtError(
@@ -106,7 +116,8 @@ def _transport_error(exc: Exception, host: str) -> AdtError:
     if isinstance(exc, httpx.ProxyError):
         return AdtError(f"the proxy refused the connection to {host}: {exc}")
     if isinstance(exc, httpx.ConnectError):
-        return AdtError(f"cannot reach {host}: {exc}")
+        hint = " - is the VPN connected?" if deadline else ""
+        return AdtError(f"cannot reach {host}: {exc}{hint}")
     return AdtError(f"request to {host} failed: {exc}")
 
 
@@ -160,8 +171,15 @@ class AdtSession:
         await self.close()
 
     async def connect(self) -> None:
-        request = self._client.build_request("GET", DISCOVERY, headers={"x-csrf-token": "fetch"})
-        reply = await self._send(request)
+        # Short deadline and no retry: nothing has been sent yet, so failing
+        # here costs the user nothing but the wait.
+        request = self._client.build_request(
+            "GET",
+            DISCOVERY,
+            headers={"x-csrf-token": "fetch"},
+            timeout=HANDSHAKE_TIMEOUT,
+        )
+        reply = await self._send(request, retries=0, deadline=HANDSHAKE_TIMEOUT)
         if reply.status_code == 401:
             raise AdtError(
                 f"authentication failed for {self.user} on {self.host} "
@@ -198,13 +216,17 @@ class AdtSession:
             headers["Content-Type"] = content_type
         return headers
 
-    async def _send(self, request: httpx.Request) -> httpx.Response:
+    async def _send(
+        self, request: httpx.Request, *, retries: int = MAX_RETRIES, deadline: float = 0.0
+    ) -> httpx.Response:
         """One round trip, with connection-level failures mapped to AdtError.
 
         Only idempotent methods are retried: replaying a PUT or a LOCK that may
         already have reached the server is worse than reporting the failure.
+        ``deadline`` is only the timeout already set on the request, carried
+        here so the failure can say what was waited for.
         """
-        attempts = MAX_RETRIES + 1 if request.method.upper() in IDEMPOTENT_METHODS else 1
+        attempts = retries + 1 if request.method.upper() in IDEMPOTENT_METHODS else 1
         last: Exception | None = None
         for attempt in range(attempts):
             self._trace_request(request)
@@ -220,7 +242,9 @@ class AdtSession:
                 log.debug("retrying %s after HTTP %s", request.url, reply.status_code)
             if attempt < attempts - 1:
                 await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
-        raise _transport_error(last, self.host) if last else AdtError(f"{request.url} failed")
+        if last:
+            raise _transport_error(last, self.host, deadline)
+        raise AdtError(f"{request.url} failed")
 
     def _trace_request(self, request: httpx.Request) -> None:
         if not self._trace:

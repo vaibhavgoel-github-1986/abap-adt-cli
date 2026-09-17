@@ -4,7 +4,13 @@ import httpx
 import pytest
 
 from adt_cli.errors import AdtError
-from adt_cli.session import AdtSession, _explain, _is_csrf_failure, _transport_error
+from adt_cli.session import (
+    HANDSHAKE_TIMEOUT,
+    AdtSession,
+    _explain,
+    _is_csrf_failure,
+    _transport_error,
+)
 
 
 def _reply(status: int, text: str = "", headers: dict[str, str] | None = None) -> httpx.Response:
@@ -37,6 +43,30 @@ def test_transport_errors_are_explained(error, expected):
 def test_certificate_failures_point_at_insecure():
     message = str(_transport_error(httpx.ConnectError("certificate verify failed"), "https://sap"))
     assert "--insecure" in message
+
+
+def test_the_handshake_deadline_names_the_vpn():
+    message = str(_transport_error(httpx.ConnectTimeout("slow"), "https://sap", HANDSHAKE_TIMEOUT))
+    assert "within 5s" in message
+    assert "VPN" in message
+
+
+async def test_an_unreachable_host_fails_on_the_handshake_without_retrying():
+    attempts = 0
+
+    async def never_answers(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectTimeout("no route")
+
+    session = AdtSession(host="https://sap", user="u", password="p", client="100")
+    session._client = httpx.AsyncClient(
+        base_url="https://sap", transport=httpx.MockTransport(never_answers)
+    )
+
+    with pytest.raises(AdtError, match="within 5s"):
+        await session.connect()
+    assert attempts == 1
 
 
 def test_a_session_needs_a_host():
