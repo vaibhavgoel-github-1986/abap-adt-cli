@@ -50,14 +50,6 @@ for you.
 
 ## Install
 
-Inside Cisco:
-
-```bash
-pipx install "git+https://wwwin-github.cisco.com/vaibhago/abap-adt-cli"
-```
-
-Anywhere else:
-
 ```bash
 pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli"
 ```
@@ -70,7 +62,6 @@ public one is a mirror. Install from whichever you can reach.
 default branch, name the tag:
 
 ```bash
-pipx install "git+https://wwwin-github.cisco.com/vaibhago/abap-adt-cli@v1.6.4"
 pipx install "git+https://github.com/vaibhavgoel-github-1986/abap-adt-cli@v1.6.4"
 ```
 
@@ -1725,15 +1716,7 @@ A `--version` argument is matched against a version pattern before it reaches
 the install URL. Anything else is refused rather than interpolated.
 
 **`abap update` always follows the public repository**, because it reads the
-GitHub releases API and that is where releases are published. If you installed
-from the internal mirror and would rather stay on it, upgrade with pipx directly
-instead:
-
-```bash
-pipx install --force "git+https://wwwin-github.cisco.com/vaibhago/abap-adt-cli@v1.6.4"
-```
-
-Both repositories carry the same tags, so the two routes land on the same code.
+GitHub releases API and that is where releases are published.
 
 ### Cutting a release
 
